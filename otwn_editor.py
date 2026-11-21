@@ -26,6 +26,7 @@ from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import unquote, urlparse
 
+import numpy as np
 import otwn_pipeline as pipeline
 
 
@@ -84,6 +85,8 @@ class JobManager:
             if not job or not job.get("id"):
                 continue
             job.setdefault("stage_params", {})
+            job.setdefault("topology_edit",
+                           pipeline.normalize_topology_edit(None))
             self.jobs[job["id"]] = job
             self.sync_job(job)
             self.save(job)
@@ -94,6 +97,8 @@ class JobManager:
             if not job:
                 raise KeyError("Задача не найдена")
             job.setdefault("stage_params", {})
+            job.setdefault("topology_edit",
+                           pipeline.normalize_topology_edit(None))
             self.sync_job(job)
             return job
 
@@ -105,7 +110,8 @@ class JobManager:
     # ------------------------------------------------------------------
     def _pipeline(self, job) -> pipeline.Pipeline:
         return pipeline.Pipeline(self.job_dir(job["id"]), job["params"],
-                                 job.get("stage_params") or {})
+                                 job.get("stage_params") or {},
+                                 job.get("topology_edit") or {})
 
     def create(self, params, name: str = "", source: str = "",
                stage_params=None) -> dict:
@@ -123,6 +129,7 @@ class JobManager:
             "updated": now(),
             "params": params,
             "stage_params": pipeline.normalize_stage_params(stage_params),
+            "topology_edit": pipeline.normalize_topology_edit(None),
             "hash": pipeline.params_hash(params),
             "running_stage": None,
             "stages": {},
@@ -329,13 +336,38 @@ class JobManager:
             p = self._pipeline(job)
         except Exception:
             return
-        for path in (p.stage_path(stage), p.preview_path(stage),
-                     p.export_path(stage)):
+        paths = [p.stage_path(stage), p.preview_path(stage),
+                 p.export_path(stage)]
+        if stage == "topology":
+            paths.append(p.idmap_path("topology"))
+        for path in paths:
             try:
                 if os.path.isfile(path):
                     os.remove(path)
             except OSError:
                 pass
+
+    def update_topology_edit(self, jid: str, edit) -> dict:
+        job = self.get(jid)
+        with self.lock:
+            if job.get("running_stage"):
+                raise RuntimeError("Нельзя менять топологию, пока этап выполняется")
+            norm = pipeline.normalize_topology_edit(edit)
+            if norm != (job.get("topology_edit") or {}):
+                job["topology_edit"] = norm
+                idx = pipeline.STAGE_ORDER.index("topology")
+                for s in pipeline.STAGE_ORDER[idx:]:
+                    self._remove_stage_files(job, s)
+                    st = job["stages"][s]
+                    st["status"] = "pending"
+                    st["approved"] = False
+                    st["preview"] = False
+                    st["exports"] = []
+                    st["message"] = "топология изменена — нужен повтор"
+                self._log(job, "Интерактивная правка топологии")
+                job["updated"] = now()
+                self.save(job)
+        return job
 
     def run(self, jid: str, stage: str, overrides=None) -> dict:
         if stage not in pipeline.STAGE_ORDER:
@@ -490,6 +522,7 @@ class JobManager:
             "updated": job.get("updated"),
             "params": job["params"],
             "stage_params": job.get("stage_params") or {},
+            "topology_edit": job.get("topology_edit") or {},
             "stage_param_specs": pipeline.resolved_stage_specs(
                 job["params"], job.get("stage_params") or {}),
             "hash": job.get("hash"),
@@ -511,6 +544,22 @@ class JobManager:
                                         int(job.get("updated", 0)))
                 for n in st.get("exports", [])
             }
+            if stage == "topology":
+                try:
+                    p = self._pipeline(job)
+                    st["idmap_url"] = ("/idmap/%s/topology?v=%s" %
+                                       (job["id"], int(job.get("updated", 0)))
+                                       if os.path.exists(p.idmap_path("topology"))
+                                       else None)
+                    try:
+                        with np.load(p.stage_path("topology"),
+                                     allow_pickle=False) as z:
+                            st["n_big"] = int(z["n_big"])
+                    except Exception:
+                        st["n_big"] = 49
+                except Exception:
+                    st["idmap_url"] = None
+                    st["n_big"] = 49
             d["stages"][stage] = st
         return d
 
@@ -599,6 +648,12 @@ class Handler(BaseHTTPRequestHandler):
                 p = MANAGER._pipeline(job)
                 self._send_file(p.preview_path(m.group(2)), "image/png")
                 return
+            m = re.fullmatch(r"/idmap/([a-f0-9]{10})/topology", path)
+            if m:
+                job = self._job(m.group(1))
+                p = MANAGER._pipeline(job)
+                self._send_file(p.idmap_path("topology"), "image/png")
+                return
             m = re.fullmatch(r"/map/([a-f0-9]{10})/([a-z_]+)", path)
             if m:
                 job = self._job(m.group(1))
@@ -637,6 +692,12 @@ class Handler(BaseHTTPRequestHandler):
             m = re.fullmatch(r"/api/job/([a-f0-9]{10})/params", path)
             if m:
                 job = MANAGER.update_params(m.group(1), body.get("params") or {})
+                self._send_json(MANAGER.public(job))
+                return
+            m = re.fullmatch(r"/api/job/([a-f0-9]{10})/topology_edit", path)
+            if m:
+                job = MANAGER.update_topology_edit(
+                    m.group(1), body.get("topology_edit") or body or {})
                 self._send_json(MANAGER.public(job))
                 return
             m = re.fullmatch(r"/api/job/([a-f0-9]{10})/run", path)

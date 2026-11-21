@@ -78,6 +78,18 @@
     overflow:hidden;position:relative}
   .preview-box img{display:block;width:100%;height:auto;max-height:340px;
     object-fit:contain;image-rendering:auto;cursor:zoom-in}
+  .topo-wrap{position:relative;display:block;width:min(100%, 340px);
+    aspect-ratio:1 / 1;margin:0 auto;line-height:0;background:#0d0b08}
+  .topo-wrap img{position:absolute;inset:0;width:100%;height:100%;
+    max-height:none !important;object-fit:fill}
+  .topo-overlay{position:absolute;inset:0;width:100%;height:100%;
+    cursor:crosshair;image-rendering:pixelated;z-index:2}
+  .topo-tools{margin:0 0 10px;padding:9px;border:1px solid #4a3827;
+    border-radius:8px;background:#14100b}
+  .topo-tools .sel{font-size:12px;color:#d9c28d;margin-bottom:7px;min-height:16px}
+  .topo-tools .row{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+  .topo-tools button{padding:5px 8px;font-size:11px}
+  .topo-tools input[type=range]{flex:1;min-width:110px;accent-color:#c9a454}
   .preview-empty{color:#6f604d;font-size:12px;text-align:center;padding:30px}
   .stage-info{min-width:0}
   .stage-info p{margin:0 0 8px;color:var(--muted)}
@@ -144,12 +156,8 @@
             <option value="2048">2048 (финал)</option>
           </select></div>
       </div>
-      <div class="grid2">
-        <div class="field"><label for="seed">Seed</label>
-          <input id="seed" type="number" value="7" min="0" step="1"></div>
-        <div class="field"><label for="joint_px">Шов, px</label>
-          <input id="joint_px" type="number" value="12" min="0" step="0.5"></div>
-      </div>
+      <div class="field"><label for="seed">Seed</label>
+        <input id="seed" type="number" value="7" min="0" step="1"></div>
       <div class="grid2">
         <div class="field"><label for="spread">Spread</label>
           <input id="spread" type="number" value="3.4" min="1" max="10" step="0.1"></div>
@@ -223,7 +231,7 @@
 
 <script>
 const $ = (id) => document.getElementById(id);
-const FIELDS = ["size","seed","variant","joint_px","dome","chip_count",
+const FIELDS = ["size","seed","variant","dome","chip_count",
   "crack_count","spread","medium_count","medium_area","medium_min_px",
   "normal_detail"];
 const LABELS = {
@@ -234,9 +242,9 @@ const LABELS = {
   normal_gl:"12. Normal GL", normal_dx:"13. Normal DX"
 };
 const DESCS = {
-  topology:"Схема ячеек и швов. Золотой ромбик — большой камень; остальные — средние/заполняющие. Ползунок «Скругление» округляет большие камни; seed и параметры раскладки — в левой панели.",
+  topology:"Схема ячеек и швов. «Ширина шва» задаёт ширину тёмной полосы; «Скругление» плавно округляет большие камни, а средние растягиваются в промежутки. При наведении большие камни подсвечиваются синим, остальные — жёлтым. Seed и параметры раскладки — в левой панели.",
   color:"Базовые цвета камней и лёгкая вариация породы. Швы ещё не наложены.",
-  seams:"Контрастность проявляет тёмную границу между камнями; ширина задаёт, на сколько пикселей она сглаживается к центру камня; темнота регулирует глубину самых тёмных участков — от глубокой канавки до уровня камня. Контраст 0 — точная копия этапа 2.",
+  seams:"Сглаживание задаётся в % от радиуса каждого камня; контрастность проявляет границу; темнота регулирует глубину самых тёмных участков. Для очень маленьких камней дополнительное сглаживание не добавляется. Ширина шва задаётся на этапе 1. Контраст 0 — точная копия этапа 2.",
   moss:"Мох только для aged; для gold/cyclopean этап подтверждается без изменений.",
   chips:"Сколы и выбоины до 200 штук. Заметность меняет цвет в albedo, глубина — рельеф в превью и в height/normal/AO.",
   cracks:"Тонкие процедурные трещины. При 0 этап ничего не меняет.",
@@ -256,6 +264,12 @@ let interactionLock = 0;
 const stageRunTimers = {};
 const stageRunningClient = {};
 const stagePending = {};
+let topoSelected = new Set();
+let topoHover = null;
+let topoData = null;
+let topoJobId = null;
+let topoRoundTimer = null;
+let topoEditBusy = false;
 
 function toast(msg, err=false){
   const el=$("toast"); el.textContent=msg; el.className="toast"+(err?" err":"");
@@ -368,6 +382,144 @@ function onStageControlInput(e){
   scheduleStageRun(stage);
 }
 
+function topoToolsHTML(){
+  if(!job) return "";
+  const sel=[...topoSelected].sort((a,b)=>a-b);
+  const specs=(job.stage_param_specs&&job.stage_param_specs.topology)||[];
+  const gv=specs.find(x=>x.key==="roundness")?.value ?? 1;
+  let val=gv;
+  if(sel.length){
+    const map=(job.topology_edit&&job.topology_edit.stone_roundness)||{};
+    if(map[sel[0]]!==undefined) val=map[sel[0]];
+  }
+  const disabled=!!job.running_stage;
+  return `<div class="topo-tools">
+    <div class="sel" id="topo-sel-label">Выбрано камней: ${sel.length}${sel.length?` — ID ${sel.join(", ")}`:""}</div>
+    <div class="row">
+      <button id="topo-merge" ${(!sel.length||sel.length<2||disabled)?"disabled":""} onclick="mergeTopoSelection()">Объединить выбранные</button>
+      <button id="topo-clear" ${(!sel.length||disabled)?"disabled":""} onclick="clearTopoSelection()">Снять выбор</button>
+    </div>
+    <div class="row" style="margin-top:7px">
+      <span style="font-size:11px;color:#b5a084">Скругление выбранных</span>
+      <input type="range" id="topo-round" min="0" max="2" step="0.01" value="${val}"
+        ${(!sel.length||disabled)?"disabled":""}
+        oninput="onTopoRoundInput(this.value)">
+      <span class="cval" id="topo-round-val">${fmtNum(val,0.01)}</span>
+    </div>
+    <div class="ch">Клик — выбрать/снять камень. Наведение подсвечивает границы.</div>
+  </div>`;
+}
+function initTopologyOverlay(){
+  if(!job) return;
+  const canvas=document.querySelector('.topo-overlay');
+  if(!canvas) return;
+  const url=job.stages?.topology?.idmap_url;
+  if(!url){return;}
+  const img=new Image();
+  img.onload=()=>{
+    const w=img.naturalWidth,h=img.naturalHeight;
+    const off=document.createElement('canvas'); off.width=w; off.height=h;
+    const octx=off.getContext('2d',{willReadFrequently:true});
+    octx.drawImage(img,0,0);
+    const data=octx.getImageData(0,0,w,h).data;
+    canvas.width=w; canvas.height=h;
+    topoData={w,h,data,canvas};
+    drawTopoOverlay();
+    canvas.addEventListener('mousemove',onTopoMove);
+    canvas.addEventListener('mouseleave',()=>{topoHover=null;drawTopoOverlay();});
+    canvas.addEventListener('click',onTopoClick);
+  };
+  img.src=url;
+}
+function topoIdAtEvent(e){
+  if(!topoData) return -1;
+  const c=topoData.canvas, r=c.getBoundingClientRect();
+  const x=Math.floor((e.clientX-r.left)/Math.max(r.width,1)*topoData.w);
+  const y=Math.floor((e.clientY-r.top)/Math.max(r.height,1)*topoData.h);
+  if(x<0||y<0||x>=topoData.w||y>=topoData.h) return -1;
+  const i=(y*topoData.w+x)*4;
+  return topoData.data[i] | (topoData.data[i+1]<<8);
+}
+function onTopoMove(e){
+  const id=topoIdAtEvent(e);
+  if(id!==topoHover){topoHover=id>=0?id:null; drawTopoOverlay();}
+}
+function onTopoClick(e){
+  const id=topoIdAtEvent(e);
+  if(id<0) return;
+  if(topoSelected.has(id)) topoSelected.delete(id); else topoSelected.add(id);
+  renderJob(job);
+}
+function drawTopoOverlay(){
+  if(!topoData) return;
+  const {w,h,data,canvas}=topoData;
+  const ctx=canvas.getContext('2d');
+  ctx.clearRect(0,0,w,h);
+  if(!topoSelected.size && topoHover===null) return;
+  const out=ctx.createImageData(w,h);
+  const sel=topoSelected, hover=topoHover;
+  const nBig=Number(job?.stages?.topology?.n_big ?? 49);
+  for(let y=0;y<h;y++){
+    for(let x=0;x<w;x++){
+      const i=(y*w+x)*4;
+      const id=data[i] | (data[i+1]<<8);
+      const active=sel.has(id) || id===hover;
+      if(!active) continue;
+      let edge=false;
+      const xl=(x-1+w)%w, xr=(x+1)%w, yu=(y-1+h)%h, yd=(y+1)%h;
+      for(const [xx,yy] of [[xl,y],[xr,y],[x,yu],[x,yd]]){
+        const j=(yy*w+xx)*4;
+        const nid=data[j] | (data[j+1]<<8);
+        if(nid!==id){edge=true;break;}
+      }
+      if(!edge) continue;
+      let col;
+      if(id===hover) col = id < nBig ? [70,160,255,245] : [255,238,120,245];
+      else col=[90,235,120,235];
+      out.data[i]=col[0];out.data[i+1]=col[1];out.data[i+2]=col[2];out.data[i+3]=col[3];
+    }
+  }
+  ctx.putImageData(out,0,0);
+}
+async function applyTopologyEdit(edit, run=true){
+  if(!job || topoEditBusy || job.running_stage) return;
+  topoEditBusy=true;
+  try{
+    job=await api("/api/job/"+job.id+"/topology_edit",{method:"POST",
+      body:JSON.stringify({topology_edit:edit})});
+    if(run){
+      job=await api("/api/job/"+job.id+"/run",{method:"POST",
+        body:JSON.stringify({stage:"topology"})});
+    }
+    renderJob(job); schedulePoll();
+  }catch(e){ toast(e.message,true); }
+  finally{ topoEditBusy=false; }
+}
+function clearTopoSelection(){ topoSelected.clear(); renderJob(job); }
+function mergeTopoSelection(){
+  if(!job || topoSelected.size<2) return;
+  const ids=[...topoSelected].sort((a,b)=>a-b);
+  const current=(job.topology_edit&&job.topology_edit.merge_groups)||[];
+  const groups=current.filter(g=>!g.some(id=>topoSelected.has(id)));
+  groups.push(ids);
+  const stone=(job.topology_edit&&job.topology_edit.stone_roundness)||{};
+  topoSelected.clear();
+  applyTopologyEdit({merge_groups:groups,stone_roundness:stone}, true);
+}
+function onTopoRoundInput(v){
+  if(!job || !topoSelected.size) return;
+  interactionLock=Date.now()+1200;
+  const el=document.getElementById("topo-round-val"); if(el) el.textContent=fmtNum(v,0.01);
+  clearTimeout(topoRoundTimer);
+  topoRoundTimer=setTimeout(()=>{
+    const stone=Object.assign({},
+      (job.topology_edit&&job.topology_edit.stone_roundness)||{});
+    for(const id of topoSelected) stone[id]=Number(v);
+    const groups=(job.topology_edit&&job.topology_edit.merge_groups)||[];
+    applyTopologyEdit({merge_groups:groups,stone_roundness:stone}, true);
+  }, 420);
+}
+
 function renderJob(j){
   job=j;
   $("jobPill").textContent = j ? (j.params.variant+" · "+j.params.size+" px") : "нет задачи";
@@ -395,7 +547,9 @@ function renderJob(j){
     const running = st.status==="running";
     const approvedFlag = !!st.approved;
     const preview = st.preview_url
-      ? `<img src="${st.preview_url}" alt="${LABELS[s]}" onclick="openModal('${st.preview_url}')">`
+      ? (s==="topology" && st.idmap_url
+          ? `<div class="topo-wrap"><img src="${st.preview_url}" alt="${LABELS[s]}" draggable="false"><canvas class="topo-overlay"></canvas></div>`
+          : `<img src="${st.preview_url}" alt="${LABELS[s]}" onclick="openModal('${st.preview_url}')">`)
       : `<div class="preview-empty">${running?"идёт генерация…":"превью появится после запуска"}</div>`;
     const exports = st.export_urls && Object.keys(st.export_urls).length
       ? `<div class="exports">${Object.keys(st.export_urls).map(n=>
@@ -424,6 +578,7 @@ function renderJob(j){
         <div class="stage-info">
           <p>${DESCS[s]||""}</p>
           ${controls}
+          ${s==="topology" ? topoToolsHTML() : ""}
           <div class="msg">${st.message||""}</div>
           ${deps.length?`<div class="deps">Сначала подтвердите: ${deps.map(d=>LABELS[d]).join(", ")}</div>`:""}
           ${exports}
@@ -438,6 +593,7 @@ function renderJob(j){
     $("progress").textContent = "";
   }
   renderLog(j);
+  initTopologyOverlay();
 }
 function renderLog(j){
   const el=$("log");
@@ -454,7 +610,9 @@ function renderJobs(){
 async function loadJob(id){
   if(!id) return;
   try{
-    job=await api("/api/job/"+id);
+    const next=await api("/api/job/"+id);
+    if(!job || job.id!==next.id){ topoSelected.clear(); topoHover=null; topoData=null; }
+    job=next;
     formDirty=false;
     renderJob(job);
     schedulePoll();

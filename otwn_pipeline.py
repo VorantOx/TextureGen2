@@ -21,7 +21,7 @@ import time
 from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
-from PIL import Image, ImageDraw
+from PIL import Image
 
 import make_otwn_textures as base
 
@@ -82,6 +82,10 @@ STAGE_DEPS: Dict[str, List[str]] = {
 # the job parameters; `default` is used for a new control.
 STAGE_PARAM_SPECS: Dict[str, List[Dict[str, Any]]] = {
     "topology": [
+        {"key": "seam_joint_px", "label": "Ширина шва, px",
+         "min": 0.0, "max": 80.0, "step": 0.5,
+         "default_from": "joint_px",
+         "hint": "ширина тёмной полосы шва в топологии"},
         {"key": "roundness", "label": "Скругление камней", "min": 0.0,
          "max": 2.0, "step": 0.01, "default": 1.0,
          "hint": "0 — жёсткие многоугольники, 2 — почти овалы"},
@@ -93,9 +97,9 @@ STAGE_PARAM_SPECS: Dict[str, List[Dict[str, Any]]] = {
          "min": 0.0, "max": 2.0, "step": 0.01, "default": 1.0},
     ],
     "seams": [
-        {"key": "seam_width_px", "label": "Ширина шва / сглаживание, px",
-         "min": 0.0, "max": 80.0, "step": 0.5, "default": 0.0,
-         "hint": "0 — без сглаживания; растёт от границы к центру камня"},
+        {"key": "seam_width_px", "label": "Сглаживание шва, % радиуса",
+         "min": 0.0, "max": 100.0, "step": 0.5, "default": 10.0,
+         "hint": "переход считается от радиуса каждого камня; малые камни не затемняются"},
         {"key": "seam_contrast", "label": "Контрастность шва",
          "min": 0.0, "max": 2.0, "step": 0.01, "default": 0.0,
          "hint": "0 — этап 2 без изменений; больше — проявляет тёмные границы"},
@@ -309,12 +313,43 @@ def variant_config(variant: str) -> Dict[str, Any]:
     )
 
 
+def normalize_topology_edit(edit: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    """Validate interactive topology edits stored in the job."""
+    if not isinstance(edit, dict):
+        return {"merge_groups": [], "stone_roundness": {}}
+    groups = []
+    seen = set()
+    for raw in edit.get("merge_groups", []) or []:
+        try:
+            g = sorted({int(v) for v in raw if int(v) >= 0})
+        except (TypeError, ValueError):
+            continue
+        if len(g) < 2 or any(v in seen for v in g):
+            continue
+        seen.update(g)
+        groups.append(g)
+    stones = {}
+    raw_stones = edit.get("stone_roundness", {}) or {}
+    if isinstance(raw_stones, dict):
+        for k, v in raw_stones.items():
+            try:
+                key = int(k)
+                val = float(np.clip(float(v), 0.0, 2.0))
+            except (TypeError, ValueError):
+                continue
+            if key >= 0:
+                stones[key] = val
+    return {"merge_groups": groups, "stone_roundness": stones}
+
+
 class Pipeline:
     def __init__(self, job_dir: str, params: Dict[str, Any],
-                 overrides: Optional[Dict[str, Any]] = None):
+                 overrides: Optional[Dict[str, Any]] = None,
+                 topology_edit: Optional[Dict[str, Any]] = None):
         self.job_dir = os.path.abspath(job_dir)
         self.params = normalize_params(params)
         self.overrides = normalize_stage_params(overrides)
+        self.topology_edit = normalize_topology_edit(topology_edit)
         self.hash = params_hash(self.params)
         self.size = int(self.params["size"])
         self.seed = int(self.params["seed"])
@@ -344,6 +379,26 @@ class Pipeline:
 
     def preview_path(self, stage: str) -> str:
         return os.path.join(self.preview_dir, "%s_%s.png" % (stage, self.hash))
+
+    def idmap_path(self, stage: str = "topology") -> str:
+        return os.path.join(self.preview_dir, "%s_ids_%s.png" %
+                            (stage, self.hash))
+
+    def merge_map(self) -> Dict[int, int]:
+        out: Dict[int, int] = {}
+        for group in self.topology_edit.get("merge_groups", []):
+            if not group:
+                continue
+            rep = int(min(group))
+            for sid in group:
+                out[int(sid)] = rep
+        return out
+
+    def display_ids(self, ids: np.ndarray) -> np.ndarray:
+        out = ids.astype(np.int32, copy=True)
+        for old, rep in self.merge_map().items():
+            out[ids == old] = rep
+        return out
 
     def export_path(self, name: str) -> str:
         return os.path.join(
@@ -398,6 +453,18 @@ class Pipeline:
             "exports": export_names,
             "message": message,
         }
+
+    def _save_topology_idmap(self, ids: np.ndarray) -> str:
+        """Small RGB PNG: R = id low byte, G = id high byte."""
+        target = min(int(self.size), 512)
+        step = max(1, int(self.size) // target)
+        small = ids[::step, ::step][:target, :target]
+        rgb = np.zeros((small.shape[0], small.shape[1], 3), np.uint8)
+        rgb[..., 0] = (small & 255).astype(np.uint8)
+        rgb[..., 1] = ((small >> 8) & 255).astype(np.uint8)
+        path = self.idmap_path("topology")
+        Image.fromarray(rgb).save(path, optimize=False, compress_level=1)
+        return path
 
     # ------------------------------------------------------------------
     # deterministic noise, regenerated when a new process resumes
@@ -592,7 +659,8 @@ class Pipeline:
         return (ids, bedge_raw, bedge, prof, rim, inradius, cell_area)
 
     def _joint(self) -> Tuple[bool, float, float, float]:
-        req = float(self.params["joint_px"])
+        req = float(self.p("topology", "seam_joint_px",
+                           self.params["joint_px"]))
         cfg = self.cfg
         # A None value is not possible in the editor, but keep compatibility.
         if req <= 0.5:
@@ -625,13 +693,16 @@ class Pipeline:
     def _topology_preview(self, ids: np.ndarray, bedge: np.ndarray,
                           centers: np.ndarray, inradius: np.ndarray,
                           cell_area: np.ndarray, n_big: int, n_med: int,
-                          stone_mask: np.ndarray, roundness: float):
+                          stone_mask: np.ndarray, stone_mask_ref: np.ndarray,
+                          roundness: float,
+                          merge_groups=None, stone_roundness=None):
         """Schematic topology view.
 
-        Large stones are marked with a small gold pin.  As roundness rises,
-        large stones are drawn as superellipses that become ellipses/circles;
-        the lost corner area is filled by a procedural small-pebble layer.
-        This is a preview only; the exact stone masks are generated below.
+        Large stones are distinguished by the editor's blue hover outline.
+        As roundness rises, large stones morph continuously into
+        ellipses/circles; their corner
+        gaps are filled by stretching the *existing* medium cells, never by
+        generating extra filler stones.
         """
         h = w = self.size
         n_total = n_big + n_med
@@ -655,92 +726,129 @@ class Pipeline:
             0.65 + 0.35 * stone_mask[med_vis, None])
 
         roundness = float(np.clip(roundness, 0.0, 2.0))
-        big_edge = np.zeros((h, w), bool)
-        if roundness <= 1.0:
+        per_stone = {}
+        for sid, value in (stone_roundness or {}).items():
+            try:
+                sid = int(sid)
+                value = float(np.clip(float(value), 0.0, 2.0))
+            except (TypeError, ValueError):
+                continue
+            if 0 <= sid < n_total:
+                per_stone[sid] = value
+        force_morph = (roundness > 1.0 or
+                       any(value > 1.0001 for value in per_stone.values()))
+        if not force_morph:
             # The normal topology view: real cell silhouettes, merely rounded
             # by the existing opening.  This keeps the default preview honest.
             big_inside = (ids < n_big) & (stone_mask > 0.5)
             out[big_inside] = cols[ids[big_inside]] * (
                 0.72 + 0.28 * stone_mask[big_inside, None])
-            occupied = med_vis | big_inside
+        elif roundness <= 1.0:
+            # Per-stone rounding must work even when the global slider is at
+            # 1.0.  Draw the normal view first, then replace only the selected
+            # cells with an area-matched circle/ellipse.
+            big_inside = (ids < n_big) & (stone_mask > 0.5)
+            out[big_inside] = cols[ids[big_inside]] * (
+                0.72 + 0.28 * stone_mask[big_inside, None])
+            bg = np.array([0.075, 0.055, 0.035], np.float32)
+            for sid, value in per_stone.items():
+                if value <= 1.0001:
+                    continue
+                cell = ids == sid
+                area = float((cell & (stone_mask_ref > 0.5)).sum()) / float(h * w)
+                r_eq = max(0.012, math.sqrt(max(area, 1e-6) / math.pi))
+                cx, cy = centers[sid]
+                dx = base.wrap(X - cx)
+                dy = base.wrap(Y - cy)
+                q = np.sqrt((dx / r_eq) ** 2 + (dy / r_eq) ** 2)
+                u = float(np.clip(value - 1.0, 0.0, 1.0))
+                u = u * u * (3.0 - 2.0 * u)
+                circle_alpha = 1.0 - base.smoothstep(0.97, 1.03, q)
+                actual_alpha = np.where(cell, stone_mask_ref, 0.0)
+                shape_alpha = ((1.0 - u) * actual_alpha +
+                               u * circle_alpha)
+                out[cell] = bg
+                out[shape_alpha > 0.5] = cols[sid]
         else:
-            # Strong rounding: large stones become superellipses, then
-            # ellipses/circles at the maximum.  The ellipse radius is capped
-            # by the nearest large-stone centre so neighbouring stones do not
-            # merge into one blob.
-            p_exp = 2.0 + 7.0 * (1.0 - roundness / 2.0)
+            # Continuous morph: at roundness=1 the shape is the real opened
+            # cell; at 2 it is a circle with approximately the same area.
+            # Keep the cell silhouette for most of the slider range; the
+            # circular target is approached only near the maximum.
+            t = float(np.clip(roundness - 1.0, 0.0, 1.0)) ** 8
+            target_ids = set(range(n_big))
+            for sid, value in per_stone.items():
+                if value > 1.0001:
+                    target_ids.add(sid)
+            target_arr = np.array(sorted(target_ids), np.int32)
+            ref_mask = np.isin(ids, target_arr) & (stone_mask_ref > 0.5)
+            ref_area = np.bincount(
+                ids[ref_mask].ravel(), minlength=n_total).astype(np.float32)
+            ref_area /= float(self.size * self.size)
             best_q = np.full((h, w), 1.0e9, np.float32)
-            best_id = np.full((h, w), -1, np.int32)
-            for i in range(n_big):
+            best_owner = np.full((h, w), -1, np.int32)
+            for i in target_ids:
                 cx, cy = centers[i]
                 dx = base.wrap(X - cx)
                 dy = base.wrap(Y - cy)
-                dd = base.wrap(centers - centers[i])
-                centre_dist = np.sqrt((dd * dd).sum(axis=1))
-                centre_dist[i] = 1.0e9
-                r_eq = min(max(0.012, math.sqrt(float(cell_area[i]) / math.pi)),
-                           0.42 * float(centre_dist.min()))
-                aspect = float(np.clip(
-                    1.0 + 2.2 * (float(inradius[i]) / max(r_eq, 1e-6) - 1.0),
-                    0.78, 1.28))
-                ax = r_eq * math.sqrt(aspect)
-                ay = r_eq / math.sqrt(aspect)
-                q = (np.abs(dx / max(ax, 1e-6)) ** p_exp +
-                     np.abs(dy / max(ay, 1e-6)) ** p_exp) ** (1.0 / p_exp)
+                # Match the circle area to the real visible area at
+                # roundness=1 so the stone area does not collapse at max.
+                r_eq = max(0.012, math.sqrt(float(ref_area[i]) / math.pi))
+                q = np.sqrt((dx / r_eq) ** 2 + (dy / r_eq) ** 2)
                 m = q < best_q
                 best_q[m] = q[m]
-                best_id[m] = i
-                big_edge |= (q < 1.04) & (q > 0.965)
+                best_owner[m] = i
 
-            big_inside = (best_q < 1.0) & (best_id >= 0)
-            out[big_inside] = cols[best_id[big_inside]]
-            occupied = med_vis | big_inside
-            rim = np.exp(-((best_q - 1.0) / 0.055) ** 2) * big_inside
-            out[rim > 0.45] *= 0.82
+            ellipse_alpha = np.zeros((h, w), np.float32)
+            valid = best_owner >= 0
+            ellipse_alpha[valid] = 1.0 - base.smoothstep(
+                0.97, 1.03, best_q[valid])
+            ref_alpha = np.where(np.isin(ids, target_arr), stone_mask_ref, 0.0)
+            t_map = np.full((h, w), t, np.float32)
+            for sid, value in per_stone.items():
+                m = ids == sid
+                if np.any(m):
+                    # The selected-stone control must react immediately,
+                    # unlike the global slider's deliberately late transition.
+                    u = float(np.clip(value - 1.0, 0.0, 1.0))
+                    t_map[m] = u * u * (3.0 - 2.0 * u)
+            shape_alpha = (1.0 - t_map) * ref_alpha + t_map * ellipse_alpha
+            big_inside = shape_alpha > 0.5
+            owner = np.where(np.isin(ids, target_arr), ids, best_owner)
+            out[big_inside] = cols[owner[big_inside]]
 
-        # Fill the voids that appear when large stones become round.
-        if roundness > 1.05:
-            sid, qmin, prof = base.build_small_layer(
-                w, self.seed, grid=86, verbose=False)
-            fill = (qmin < 1.0) & (~occupied)
-            # Only fill the interstices, never the normal thin joints at low
-            # roundness.  The fill strength ramps in with the slider.
-            strength = float(base.smoothstep(0.85, 1.55, roundness))
-            if strength > 0:
-                fcols = rng.uniform(0.25, 0.85, (86 * 86, 3)).astype(np.float32)
-                fcols = np.clip(fcols * np.array([0.95, 0.91, 0.78], np.float32)
-                                + 0.02, 0, 1)
-                # deterministic soft edge from qmin; avoids a black gap
-                # between the pebble and the rounded large stone
-                out[fill] = fcols[sid[fill]] * (
-                    0.70 + 0.30 * prof[fill, None])
+            # No new stones: stretch the *existing* medium cells into the
+            # openings between the rounded large stones.  The fill strength
+            # grows with t, so 1.01 looks almost exactly like 1.0 while the
+            # maximum value has no procedural pebble layer at all.
+            gap = (~big_inside) & (~med_vis)
+            if n_med > 0 and t > 0.0 and np.any(gap):
+                best_d = np.full((h, w), 1.0e9, np.float32)
+                nearest_med = np.full((h, w), n_big, np.int32)
+                for j in range(n_big, n_total):
+                    dx = base.wrap(X - centers[j, 0])
+                    dy = base.wrap(Y - centers[j, 1])
+                    d = dx * dx + dy * dy
+                    m = d < best_d
+                    best_d[m] = d[m]
+                    nearest_med[m] = j
+                fill_alpha = float(np.clip(t, 0.0, 1.0))
+                out[gap] = (out[gap] * (1.0 - fill_alpha) +
+                            cols[nearest_med[gap]] * fill_alpha)
 
-        # Separate overlapping ellipses with a joint ring; without this the
-        # strong-rounding preview reads as a field of merged blobs.
-        out[big_edge] = np.array([0.095, 0.072, 0.046], np.float32)
+        # Interactive merge: paint the selected cells as one stone.  Big
+        # stones are identified by the blue hover outline, not by markers.
+        for group in (merge_groups or []):
+            try:
+                g = sorted({int(v) for v in group if int(v) >= 0})
+            except (TypeError, ValueError):
+                continue
+            if len(g) < 2:
+                continue
+            rep = g[0]
+            union = np.isin(ids, g)
+            out[union] = cols[rep]
 
-        # Small pin on every large stone.  The marker is deliberately tiny so
-        # it does not hide the shape.
-        img = Image.fromarray((np.clip(out, 0, 1) * 255 + 0.5).astype(np.uint8))
-        draw = ImageDraw.Draw(img)
-        r = max(4, int(round(0.0060 * self.size)))
-        line = max(1, self.size // 1024)
-        for i in range(n_big):
-            cx, cy = centers[i]
-            # draw wrapped copies near the tile border
-            for ox in (-w, 0, w):
-                for oy in (-h, 0, h):
-                    px = int(round(cx * w + ox))
-                    py = int(round(cy * h + oy))
-                    if -r <= px < w + r and -r <= py < h + r:
-                        # small diamond pin: compact, but clearly not a stone
-                        draw.polygon([(px, py - r), (px + r, py),
-                                      (px, py + r), (px - r, py)],
-                                     fill=(255, 240, 170),
-                                     outline=(25, 18, 10))
-                        draw.line([px, py - r, px, py + r],
-                                  fill=(110, 70, 24), width=line)
-        return np.asarray(img).astype(np.float32) / 255.0
+        return np.clip(out, 0.0, 1.0).astype(np.float32)
 
     # -- 1. topology ----------------------------------------------------
     def _stage_topology(self, _state: Dict[str, np.ndarray]):
@@ -759,6 +867,37 @@ class Pipeline:
         n_big = int(layout["n_big"])
         n_med = int(layout["n_med"])
         n_total = n_big + n_med
+
+        # Apply interactive merge groups to the actual cell labels before
+        # rebuilding the edge field.  This makes the merge visible not only
+        # in the schematic preview, but also in colour and all later stages.
+        merge_groups = self.topology_edit.get("merge_groups", [])
+        if merge_groups:
+            src_ids = ids.copy()
+            area_orig = np.bincount(
+                src_ids.ravel(), minlength=n_total).astype(np.float32)
+            new_centers = centers.copy()
+            for group in merge_groups:
+                valid = [int(v) for v in group if 0 <= int(v) < n_total]
+                if len(valid) < 2:
+                    continue
+                rep = min(valid)
+                mask = np.isin(src_ids, valid)
+                if not np.any(mask):
+                    continue
+                ids[mask] = rep
+                wsum = float(area_orig[valid].sum())
+                if wsum > 0:
+                    new_centers[rep] = (
+                        centers[valid] * area_orig[valid, None]).sum(0) / wsum
+            centers = new_centers
+            pad = max(16, int(0.020 * self.size))
+            edge = ((ids != np.roll(ids, 1, 0)) |
+                    (ids != np.roll(ids, -1, 0)) |
+                    (ids != np.roll(ids, 1, 1)) |
+                    (ids != np.roll(ids, -1, 1)))
+            dist = base.periodic_distance(edge, pad)
+            bedge_raw = np.maximum(dist - 1.0, 0.0) / self.size
 
         # Roundness is a stage-local control: it only changes the geometry
         # pass, never the expensive layout cache.  The two terms control
@@ -780,7 +919,11 @@ class Pipeline:
         soft_px = max(0.8, 0.0015 * self.size)
         pad = max(16, int(0.020 * self.size))
         if joint_on:
-            round_px = max(0.5, 0.0140 * self.size * roundness)
+            # Keep the default look at the job's base joint width, but let
+            # the topology-local seam width widen or narrow the actual gap.
+            seam_delta = float(joint_px_eff) - float(self.params["joint_px"])
+            round_px = max(
+                0.5, 0.0140 * self.size * roundness + 0.5 * seam_delta)
             core = bedge_raw > (round_px / self.size)
             dist_core = base.periodic_distance(core, pad)
             stone_mask = 1.0 - base.smoothstep(
@@ -789,10 +932,24 @@ class Pipeline:
             rim = np.exp(-((dist_core - round_px) / rim_w) ** 2)
         else:
             dist_core = np.zeros_like(bedge_raw)
-            stone_mask = base.smoothstep(
-                -soft_px / self.size, soft_px / self.size, bedge_raw)
+            # Width 0 means "stones touch": no dark gap at all.  The cell
+            # boundaries remain visible only as a change of stone colour.
+            stone_mask = np.ones_like(bedge_raw, dtype=np.float32)
             rim_w = max(1.0, 0.003 * self.size)
             rim = np.exp(-(bedge_raw / rim_w) ** 2)
+        # Reference silhouette at roundness=1.  The preview morphs from this
+        # stable shape instead of from the live mask, which shrinks as the
+        # opening radius grows and used to cause an area jump near 1.5.
+        if joint_on:
+            rp_ref = max(0.5,
+                         0.0140 * self.size + 0.5 * seam_delta)
+            core_ref = bedge_raw > (rp_ref / self.size)
+            dist_ref = base.periodic_distance(core_ref, pad)
+            stone_mask_ref = 1.0 - base.smoothstep(
+                rp_ref - soft_px, rp_ref + soft_px, dist_ref)
+        else:
+            stone_mask_ref = stone_mask
+
         big_mask = stone_mask * (ids < n_big)
         med_mask = stone_mask * (ids >= n_big)
         gap = 1.0 - stone_mask
@@ -804,13 +961,15 @@ class Pipeline:
         local_inr = np.maximum(local_inr_norm * self.size, 1.0)
         large_gate = base.smoothstep(0.035, 0.055, local_inr_norm)
         soft_col = max(2.0, 0.010 * self.size)
-        soft_col_px = soft_col * (0.40 + 0.60 * large_gate)
+        # Same colour transition width for every stone.  Previously this
+        # depended on large_gate, so small stones got a nearly hard edge while
+        # large ones had a visibly wider blend.
+        soft_col_px = np.full_like(large_gate, soft_col, dtype=np.float32)
         if joint_on:
             stone_col_mask = 1.0 - base.smoothstep(
                 round_px - soft_col_px, round_px + soft_col_px, dist_core)
         else:
-            stone_col_mask = base.smoothstep(
-                -soft_col_px / self.size, soft_col_px / self.size, bedge_raw)
+            stone_col_mask = np.ones_like(bedge_raw, dtype=np.float32)
         gap_col_mask = 1.0 - stone_col_mask
 
         soft_h = max(1.5, 0.0035 * self.size)
@@ -818,8 +977,7 @@ class Pipeline:
             stone_h = 1.0 - base.smoothstep(
                 round_px - soft_h, round_px + soft_h, dist_core)
         else:
-            stone_h = base.smoothstep(
-                -soft_h / self.size, soft_h / self.size, bedge_raw)
+            stone_h = np.ones_like(bedge_raw, dtype=np.float32)
         stone_h = base.gauss_blur(stone_h, max(0.8, 0.0012 * self.size))
         gap_h = 1.0 - stone_h
 
@@ -844,11 +1002,14 @@ class Pipeline:
             0.0, np.maximum(edge_px, 1e-4),
             (bedge - edge_start) * self.size)
 
-        # Schematic colour view: marked large stones, real medium cells and
-        # procedural pebbles in the voids produced by strong rounding.
+        # Schematic colour view: marked large stones and real medium cells
+        # stretching into the voids produced by strong rounding.
         prev = self._topology_preview(
             ids, bedge, centers, inradius, cell_area, n_big, n_med,
-            stone_mask, roundness)
+            stone_mask, stone_mask_ref, roundness,
+            merge_groups=self.topology_edit.get("merge_groups", []),
+            stone_roundness=self.topology_edit.get("stone_roundness", {}))
+        self._save_topology_idmap(self.display_ids(ids))
 
         delta = dict(
             ids=ids.astype(np.int16), bedge_raw=bedge_raw.astype(np.float32),
@@ -859,6 +1020,7 @@ class Pipeline:
             n_big=np.int32(n_big), n_med=np.int32(n_med),
             dist_core=dist_core.astype(np.float32),
             stone_mask=stone_mask.astype(np.float32),
+            stone_mask_ref=stone_mask_ref.astype(np.float32),
             big_mask=big_mask.astype(np.float32),
             med_mask=med_mask.astype(np.float32),
             gap=gap.astype(np.float32),
@@ -913,19 +1075,59 @@ class Pipeline:
         pal_p = pal_w / pal_w.sum()
         cell_col[:n_big] = pal[rng.choice(len(pal), n_big, p=pal_p)]
         cell_col[:n_big] *= rng.uniform(0.97, 1.08, (n_big, 1)).astype(np.float32)
+        small_col = None
         if n_med:
-            cell_col[n_big:] = pal[rng.choice(len(pal), n_med, p=pal_p)]
-            cell_col[n_big:] *= rng.uniform(0.95, 1.06, (n_med, 1)).astype(np.float32)
+            # Junction stones use the darker small-stone palette.
+            small_pal = np.asarray(cfg["small_pal"], np.float32) * 0.88
+            small_col = small_pal[rng.choice(len(small_pal), n_med)]
+            small_col *= rng.uniform(0.94, 1.05, (n_med, 1)).astype(np.float32)
 
         pal_base = (pal * pal_w[:, None]).sum(0) / max(pal_w.sum(), 1e-6)
         cell_col = 0.90 * cell_col + 0.10 * pal_base[None, :]
         lum = cell_col @ np.array([0.2126, 0.7152, 0.0722], np.float32)
+
+        # Visible area of each stone in pixels.  Stones that are mostly
+        # clipped at the texture border (or nearly swallowed by neighbours)
+        # must be treated as small fillers, not as full-size slabs.
+        vis_area = np.bincount(
+            ids[state["stone_col_mask"] > 0.5].ravel(), minlength=n_total)
+        small_area = max(600.0, 0.0030 * self.size * self.size)
+        is_small = ((np.arange(n_total) >= n_big) |
+                    (vis_area < small_area))
+
         lum_floor = {"aged": 0.50, "cyclopean": 0.58}.get(self.variant, 0.60)
-        cell_col *= np.maximum(1.0, lum_floor / np.maximum(lum, 1e-6))[:, None]
+        lift = np.maximum(1.0, lum_floor / np.maximum(lum, 1e-6))
+        cell_col *= np.where(is_small, 1.0, lift)[:, None]
+
         color_variation = float(np.clip(
             float(self.p("color", "color_variation", 1.0)), 0.0, 2.0))
         cell_col = pal_base[None, :] + (cell_col - pal_base[None, :]) * color_variation
         cell_col = np.clip(cell_col, 0.04, 1.0)
+
+        # Fillers are set after the global floor/variation pass, otherwise
+        # the luminance floor lifts them back up and they glow between the
+        # dark joints again.
+        if small_col is not None:
+            cell_col[n_big:] = small_col
+
+        # A merged stone gets the average colour of its members instead of
+        # one representative colour.  This avoids large flat highlights that
+        # can look overexposed.
+        for group in self.topology_edit.get("merge_groups", []):
+            valid = sorted({int(v) for v in group if 0 <= int(v) < n_total})
+            if len(valid) >= 2:
+                rep = valid[0]
+                cell_col[rep] = cell_col[valid].mean(axis=0)
+
+        # Soft, per-stone highlight ceiling.  Small fillers peak lower than
+        # big slabs, and the rolloff is exponential so bright stones keep
+        # their shading instead of turning into a flat clipped patch.
+        lum = cell_col @ np.array([0.2126, 0.7152, 0.0722], np.float32)
+        ceil = np.where(is_small, 0.54, 0.70).astype(np.float32)
+        knee = ceil - 0.08
+        over = np.maximum(lum - knee, 0.0)
+        target = knee + 0.08 * (1.0 - np.exp(-over / 0.08))
+        cell_col *= (target / np.maximum(lum, 1e-6))[:, None]
         color_shade = float(np.clip(
             float(self.p("color", "color_shade", 1.0)), 0.0, 2.0))
 
@@ -969,6 +1171,22 @@ class Pipeline:
                         self.params["dome"] * (1.0 - prof_shape[..., None]))
         cell_col_px *= (1.0 + 0.030 * n_tint)[..., None]
 
+        # Soft highlight ceiling.  With colour variation > 1 the noisy
+        # per-pixel colour can exceed 1.0; clipping then turns the brightest
+        # stones into flat, self-luminous-looking patches.  Preserve the hue
+        # and roll off only the over-bright luminance.
+        px_lum = cell_col_px @ np.array(
+            [0.2126, 0.7152, 0.0722], np.float32)
+        # Safety net only: after the per-stone rolloff very few pixels can
+        # reach this, so the ceiling does not flatten whole stones.  Do not
+        # desaturate here: pulling bright stones toward grey made them look
+        # washed out, which reads as a glow against the dark mortar.
+        hi = {"aged": 0.80, "cyclopean": 0.80}.get(self.variant, 0.82)
+        px_scale = np.minimum(
+            1.0, hi / np.maximum(px_lum, 1e-6))
+        cell_col_px = np.clip(
+            cell_col_px * px_scale[..., None], 0.0, 1.0).astype(np.float32)
+
         mortar_col = cfg["mortar"] if joint_on else np.array(
             [0.095, 0.070, 0.042], np.float32)
         gap_col = np.clip(mortar_col * 2.20 + 0.04, 0.0, 1.0)
@@ -979,13 +1197,33 @@ class Pipeline:
         wide_line = base.smoothstep(0.68, 0.90, gap_wide)
         fill_col = gap_col[None, None, :]
         cs = max(1.5, 0.004 * self.size)
-        cell_col_px = np.stack([
-            base.gauss_blur(cell_col_px[..., c], cs)
-            for c in range(3)], axis=-1).astype(np.float32)
 
+        # Composite first, then smooth the finished colour.  The previous
+        # implementation blurred cell colours before applying the masks, so
+        # the mortar/gap mask cut the blur off at some boundaries.  Now the
+        # transition is applied to the already composited image and therefore
+        # crosses every boundary consistently.
         prev = (cell_col_px * state["stone_col_mask"][..., None] +
                 fill_col * state["gap_col_mask"][..., None])
+        prev = np.stack([
+            base.gauss_blur(prev[..., c], cs)
+            for c in range(3)], axis=-1).astype(np.float32)
         prev = np.clip(prev, 0, 1)
+
+        # Soft edge shading after the composite.  It strongly darkens the
+        # rim of light stones, so they no longer read as flat glowing
+        # patches.  This is independent of the user colour_shade control.
+        # Use the topology profile (distance to the real stone boundary),
+        # not the cell-centred cap.  This is important for merged stones:
+        # their union can be lopsided, and a cap around the representative
+        # centre leaves one side unshaded and glowing.
+        edge = np.clip(1.0 - prof, 0.0, 1.0)
+        edge_lum = prev @ np.array(
+            [0.2126, 0.7152, 0.0722], np.float32)
+        edge_amount = ((0.030 + 0.070 * base.smoothstep(
+            0.50, 0.88, edge_lum)) * self.params["dome"] * edge)
+        prev = np.clip(prev * (1.0 - edge_amount[..., None]), 0, 1)
+
         delta = dict(
             col=prev.astype(np.float32),
             cell_col_px=cell_col_px.astype(np.float32),
@@ -1027,7 +1265,11 @@ class Pipeline:
                         fill_col * gap_col_mask[..., None])
         base_col = np.clip(base_col, 0.0, 1.0).astype(np.float32)
 
-        width_px = max(0.0, float(self.p("seams", "seam_width_px", 0.0)))
+        joint_px = max(0.0, float(self.p(
+            "topology", "seam_joint_px",
+            self.p("seams", "seam_joint_px", 0.0))))
+        width_pct = float(np.clip(
+            float(self.p("seams", "seam_width_px", 0.0)), 0.0, 100.0))
         contrast = float(np.clip(
             float(self.p("seams", "seam_contrast", 0.0)), 0.0, 2.0))
         # Zero contrast means no seam correction at all.  Width likewise
@@ -1037,16 +1279,43 @@ class Pipeline:
             ramp = stone_col_mask
             msg = "контраст 0 — точная копия этапа 2"
         else:
-            # bedge is zero on the cell boundary; work in current pixels so
-            # the slider's number means what it says.  At width 0 the edge is
-            # a sharp (but still antialiased) line; positive width is a
-            # smooth falloff from the boundary toward the stone centre.
+            # bedge is zero on the cell boundary.  ``joint_px`` is the flat
+            # dark band width; ``width_px`` is the fade from that band toward
+            # the stone centre.  With both at zero it is a sharp line.
             s_px = np.maximum(state["bedge"].astype(np.float32) * self.size,
                               0.0)
-            width_eff = max(1.5, width_px)
-            u = np.clip(s_px / width_eff, 0.0, 1.0)
-            smooth = u * u * (3.0 - 2.0 * u)
-            alpha = contrast * (1.0 - smooth)
+            local_r = state.get("local_inr")
+            if local_r is None:
+                local_r = np.maximum(
+                    state["local_inr_norm"].astype(np.float32) * self.size,
+                    1.0)
+            local_r = np.maximum(local_r.astype(np.float32), 1.0)
+            # Percent of each stone's own radius: small stones get a small
+            # absolute transition instead of being swallowed by a fixed band.
+            fade_px = (width_pct / 100.0) * local_r
+            # A small absolute minimum keeps the gradient readable on
+            # medium-sized stones, but it is capped by a fraction of the
+            # radius so tiny stones are still not swallowed.  Zero width
+            # must stay a hard edge: no tonal ramp into the stone.
+            if width_pct > 0.0:
+                min_fade = np.minimum(0.012 * self.size, 0.45 * local_r)
+                fade_px = np.maximum(fade_px, min_fade)
+            # The dark core belongs to the joint, not to the stone.  Using
+            # the depth inside the stone (bedge) put the flat core band
+            # inside the stone, so a big stone lost its outer 8 px and read
+            # as a bright core fading through a dark rim - a glow.  Now the
+            # correction follows the real gap mask; only a short tone ramp
+            # reaches into the stone, driven by the width slider.
+            inside = state["stone_col_mask"].astype(np.float32)
+            gap_w = np.clip(1.0 - inside, 0.0, 1.0)
+            u = np.clip(s_px / np.maximum(fade_px, 1.0), 0.0, 1.0)
+            tone = 1.0 - u * u * (3.0 - 2.0 * u)
+            # No size gate here: the soft fringe of a small stone must be
+            # darkened exactly like the joint, otherwise its stage-2 blend
+            # stays visible as a halo around it.  The short tone ramp is
+            # already bounded by the stone radius, so small stones do not
+            # get an oversized dark rim.
+            alpha = contrast * np.maximum(gap_w, tone)
             alpha = np.clip(alpha, 0.0, 1.0)
             dark = np.array([0.075, 0.052, 0.032], np.float32)
             col = (base_col * (1.0 - alpha[..., None]) +
@@ -1071,8 +1340,9 @@ class Pipeline:
                 col = col.astype(np.float32)
 
             ramp = stone_col_mask
-            msg = ("шов: контраст %.2f, сглаживание %.1f px, темнота %.2f")
-            msg = msg % (contrast, width_px, darkness)
+            msg = ("шов: ширина %.1f px, сглаживание %.1f%% радиуса, "
+                   "контраст %.2f, темнота %.2f")
+            msg = msg % (joint_px, width_pct, contrast, darkness)
 
         delta = dict(
             col=col.astype(np.float32), ramp=ramp.astype(np.float32),
