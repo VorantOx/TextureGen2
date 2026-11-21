@@ -1,0 +1,583 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>OTWN Texture Editor</title>
+<style>
+  :root{
+    --bg:#14110d; --panel:#211b14; --panel2:#2a2118; --line:#4a3928;
+    --text:#e8dcc8; --muted:#a9967c; --gold:#d8b35c; --green:#7fbd78;
+    --red:#d67b6a; --blue:#7faac4; --shadow:0 10px 30px #0008;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:
+    radial-gradient(1200px 700px at 70% -10%, #3a2c1c88, transparent 60%),
+    var(--bg);color:var(--text);font:14px/1.45 "Segoe UI",system-ui,sans-serif}
+  header{display:flex;align-items:center;gap:16px;padding:14px 20px;
+    border-bottom:1px solid var(--line);background:#17130ecc;position:sticky;
+    top:0;z-index:20;backdrop-filter:blur(8px)}
+  header h1{font:600 20px Georgia,serif;letter-spacing:.06em;margin:0;
+    color:var(--gold);white-space:nowrap}
+  header .sub{color:var(--muted);font-size:12px}
+  header .spacer{flex:1}
+  select,button,input{font:inherit}
+  select,input[type=number],input[type=text]{background:#100d09;color:var(--text);
+    border:1px solid var(--line);border-radius:7px;padding:7px 9px;width:100%}
+  button{cursor:pointer;border:1px solid #5b442c;background:linear-gradient(#3a2c1d,#2a2015);
+    color:var(--text);border-radius:7px;padding:8px 12px;transition:.15s}
+  button:hover{border-color:var(--gold);filter:brightness(1.12)}
+  button:disabled{opacity:.38;cursor:not-allowed;filter:none}
+  button.primary{background:linear-gradient(#6b5226,#4a3418);border-color:#b58e45;color:#fff3d4}
+  button.good{background:linear-gradient(#34552d,#243d20);border-color:#68a05e}
+  button.warn{background:linear-gradient(#5b352b,#40231c);border-color:#a55a49}
+  .layout{display:grid;grid-template-columns:355px minmax(0,1fr);gap:18px;
+    max-width:1560px;margin:0 auto;padding:18px}
+  .side{position:sticky;top:76px;align-self:start;max-height:calc(100vh - 95px);
+    overflow:auto;padding-right:4px}
+  .card{background:linear-gradient(150deg,#261e16,#1b1610);border:1px solid var(--line);
+    border-radius:12px;box-shadow:var(--shadow);padding:15px;margin-bottom:16px}
+  .card h2{font:600 15px Georgia,serif;color:var(--gold);margin:0 0 12px;
+    letter-spacing:.04em}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+  .field{display:flex;flex-direction:column;gap:4px;margin-bottom:9px}
+  .field label{font-size:11px;color:var(--muted);text-transform:uppercase;
+    letter-spacing:.05em}
+  .hint{color:var(--muted);font-size:11px;margin:6px 0 12px}
+  .actions{display:flex;gap:8px;flex-wrap:wrap}
+  .actions button{flex:1;min-width:110px}
+  .statusbar{display:flex;align-items:center;gap:10px;font-size:12px;
+    color:var(--muted);margin-bottom:12px;flex-wrap:wrap}
+  .dot{width:9px;height:9px;border-radius:50%;background:var(--muted);
+    display:inline-block;box-shadow:0 0 8px currentColor}
+  .dot.running{background:var(--blue);animation:pulse 1s infinite}
+  .dot.ready{background:var(--gold)}
+  .dot.approved{background:var(--green)}
+  .dot.failed{background:var(--red)}
+  @keyframes pulse{50%{opacity:.35}}
+  .stage{background:linear-gradient(145deg,#251d15,#1a1510);border:1px solid var(--line);
+    border-radius:12px;margin-bottom:14px;overflow:hidden;box-shadow:var(--shadow)}
+  .stage.approved{border-color:#4f7847}
+  .stage.running{border-color:#4e7185}
+  .stage.failed{border-color:#84483d}
+  .stage-head{display:flex;align-items:center;gap:12px;padding:12px 15px;
+    border-bottom:1px solid #3a2c1e;background:#201911aa}
+  .stage-title{font:600 15px Georgia,serif;color:#f2e4c9}
+  .stage-num{color:var(--gold);font-size:12px;min-width:30px}
+  .badge{font-size:10px;padding:3px 7px;border-radius:999px;border:1px solid #5a432a;
+    color:var(--muted);text-transform:uppercase;letter-spacing:.05em}
+  .badge.ready{color:#edc979;border-color:#8b6a32}
+  .badge.approved{color:#b9e7ae;border-color:#527c4a}
+  .badge.running{color:#b9dbef;border-color:#51768b}
+  .badge.failed{color:#f0b0a3;border-color:#8d4b3e}
+  .stage-head .right{margin-left:auto;display:flex;gap:7px;align-items:center;flex-wrap:wrap}
+  .stage-body{display:grid;grid-template-columns:minmax(220px,360px) minmax(0,1fr);
+    gap:16px;padding:14px}
+  .preview-box{background:#0d0b08;border:1px solid #3b2d1f;border-radius:8px;
+    min-height:130px;display:flex;align-items:center;justify-content:center;
+    overflow:hidden;position:relative}
+  .preview-box img{display:block;width:100%;height:auto;max-height:340px;
+    object-fit:contain;image-rendering:auto;cursor:zoom-in}
+  .preview-empty{color:#6f604d;font-size:12px;text-align:center;padding:30px}
+  .stage-info{min-width:0}
+  .stage-info p{margin:0 0 8px;color:var(--muted)}
+  .stage-info .msg{color:#d3c1a4;font-size:13px}
+  .stage-controls{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));
+    gap:9px 14px;margin:4px 0 12px;padding:10px;border:1px solid #3b2d20;
+    border-radius:8px;background:#18130e}
+  .ctrl{min-width:0}
+  .ctrl .top{display:flex;justify-content:space-between;gap:8px;align-items:baseline}
+  .ctrl label{font-size:11px;color:#b5a084;letter-spacing:.02em}
+  .ctrl .cval{font:11px Consolas,monospace;color:var(--gold);white-space:nowrap}
+  .ctrl input[type=range]{width:100%;accent-color:#c9a454;margin:5px 0 0;
+    height:16px;cursor:ew-resize}
+  .ctrl .ch{font-size:10px;color:#786a58;margin-top:1px}
+  .ctrl.disabled{opacity:.45}
+  .deps{font-size:11px;color:#8b7860;margin-top:10px}
+  .exports{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px}
+  .exports a{color:#d9c184;text-decoration:none;border:1px solid #574329;
+    border-radius:6px;padding:5px 8px;font-size:11px;background:#1a140e}
+  .exports a:hover{border-color:var(--gold)}
+  .log{max-height:150px;overflow:auto;font:11px/1.5 Consolas,monospace;
+    color:#9d8b73;background:#0e0b08;border:1px solid #2f2419;border-radius:8px;
+    padding:9px;margin-top:10px;white-space:pre-wrap}
+  .toast{position:fixed;right:18px;bottom:18px;max-width:430px;padding:12px 14px;
+    border:1px solid #6e5430;background:#2b2117;border-radius:10px;box-shadow:var(--shadow);
+    color:#f0dfc5;z-index:50;display:none;white-space:pre-wrap}
+  .toast.err{border-color:#8b4a3d;background:#2e1a15}
+  .modal{position:fixed;inset:0;background:#000c;z-index:100;display:none;
+    align-items:center;justify-content:center;padding:20px}
+  .modal img{max-width:96vw;max-height:92vh;box-shadow:0 0 50px #000}
+  .modal.open{display:flex}
+  .pill{display:inline-flex;gap:6px;align-items:center;border:1px solid #4b3926;
+    border-radius:999px;padding:3px 8px;font-size:11px;color:#bca98d;background:#18130e}
+  @media(max-width:980px){.layout{grid-template-columns:1fr}.side{position:static;max-height:none}
+    .stage-body{grid-template-columns:1fr}.preview-box img{max-height:260px}}
+</style>
+</head>
+<body>
+<header>
+  <h1>OTWN Texture Editor</h1>
+  <span class="sub">пошаговая генерация · кэш каждого этапа</span>
+  <span class="spacer"></span>
+  <span class="pill" id="jobPill">нет задачи</span>
+  <select id="jobSelect" style="width:250px" title="Открыть задачу"></select>
+</header>
+
+<div class="layout">
+  <aside class="side">
+    <div class="card">
+      <h2>Новая генерация</h2>
+      <div class="field"><label for="name">Имя задачи</label>
+        <input id="name" type="text" placeholder="например, gold 512 preview"></div>
+      <div class="grid2">
+        <div class="field"><label for="variant">Вариант</label>
+          <select id="variant">
+            <option value="gold">gold</option>
+            <option value="aged">aged</option>
+            <option value="cyclopean">cyclopean</option>
+          </select></div>
+        <div class="field"><label for="size">Размер</label>
+          <select id="size">
+            <option value="512">512 (быстрый)</option>
+            <option value="1024">1024</option>
+            <option value="2048">2048 (финал)</option>
+          </select></div>
+      </div>
+      <div class="grid2">
+        <div class="field"><label for="seed">Seed</label>
+          <input id="seed" type="number" value="7" min="0" step="1"></div>
+        <div class="field"><label for="joint_px">Шов, px</label>
+          <input id="joint_px" type="number" value="12" min="0" step="0.5"></div>
+      </div>
+      <div class="grid2">
+        <div class="field"><label for="spread">Spread</label>
+          <input id="spread" type="number" value="3.4" min="1" max="10" step="0.1"></div>
+        <div class="field"><label for="dome">Dome</label>
+          <input id="dome" type="number" value="0.9" min="0" max="2" step="0.05"></div>
+      </div>
+      <div class="grid2">
+        <div class="field"><label for="chip_count">Сколы</label>
+          <input id="chip_count" type="number" value="15" min="0" max="200" step="1"></div>
+        <div class="field"><label for="crack_count">Трещины</label>
+          <input id="crack_count" type="number" value="0" min="0" max="100" step="1"></div>
+      </div>
+      <div class="grid2">
+        <div class="field"><label for="medium_count">Средних камней</label>
+          <input id="medium_count" type="number" value="16" min="0" max="128" step="1"></div>
+        <div class="field"><label for="medium_area">Medium area</label>
+          <input id="medium_area" type="number" value="0.09" min="0" max="0.4" step="0.005"></div>
+      </div>
+      <div class="field"><label for="medium_min_px">Мин. радиус среднего, px@2048 (0 = выкл.)</label>
+        <input id="medium_min_px" type="number" value="40" min="0" max="256" step="1"></div>
+      <div class="field"><label for="normal_detail">Normal detail</label>
+        <input id="normal_detail" type="number" value="1.0" min="0" max="4" step="0.05"></div>
+      <div class="actions">
+        <button class="primary" id="createBtn">Создать задачу</button>
+        <button id="applyBtn" disabled>Применить к текущей</button>
+      </div>
+      <div class="hint">512 — только для быстрой проверки albedo. После подтверждения
+        создайте клон 2048 для финальных карт. В карточке каждого этапа есть
+        свои ползунки; они пересчитывают только этот этап. Все массивы лежат в
+        <code>editor_data/jobs/&lt;id&gt;/cache</code>.</div>
+    </div>
+
+    <div class="card">
+      <h2>Вариации</h2>
+      <div class="hint">Клонирование сохраняет параметры и создаёт отдельную
+        задачу с собственным кэшем.</div>
+      <div class="actions">
+        <button id="clone2kBtn" disabled>Клон 2048</button>
+        <button id="cloneAgedBtn" disabled>Клон aged</button>
+      </div>
+      <div class="actions" style="margin-top:8px">
+        <button id="cloneCycBtn" disabled>Клон cyclopean</button>
+        <button class="primary" id="bothVariantsBtn" disabled>Все ОК → aged + cyclopean</button>
+      </div>
+      <div class="actions" style="margin-top:8px">
+        <button class="good" id="publishBtn" disabled>Опубликовать в textures_otwn</button>
+        <button class="warn" id="resetBtn" disabled>Сброс текущей</button>
+        <button class="warn" id="deleteBtn" disabled>Удалить задачу</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Журнал</h2>
+      <div class="log" id="log">—</div>
+    </div>
+  </aside>
+
+  <main>
+    <div class="statusbar">
+      <span id="jobName" style="color:#e9d7b6;font-size:15px">Задача не выбрана</span>
+      <span id="runState"></span>
+      <span class="spacer" style="flex:1"></span>
+      <span id="progress"></span>
+    </div>
+    <div id="stages"></div>
+  </main>
+</div>
+
+<div class="toast" id="toast"></div>
+<div class="modal" id="modal"><img id="modalImg" alt=""></div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const FIELDS = ["size","seed","variant","joint_px","dome","chip_count",
+  "crack_count","spread","medium_count","medium_area","medium_min_px",
+  "normal_detail"];
+const LABELS = {
+  topology:"1. Топология", color:"2. Цвет камней", seams:"3. Швы",
+  moss:"4. Мох", chips:"5. Сколы", cracks:"6. Царапины",
+  speckles:"7. Минеральные вкрапления", albedo:"8. Albedo — итог",
+  height:"9. Height", roughness:"10. Roughness", ao:"11. AO",
+  normal_gl:"12. Normal GL", normal_dx:"13. Normal DX"
+};
+const DESCS = {
+  topology:"Схема ячеек и швов. Золотой ромбик — большой камень; остальные — средние/заполняющие. Ползунок «Скругление» округляет большие камни; seed и параметры раскладки — в левой панели.",
+  color:"Базовые цвета камней и лёгкая вариация породы. Швы ещё не наложены.",
+  seams:"Контрастность проявляет тёмную границу между камнями; ширина задаёт, на сколько пикселей она сглаживается к центру камня; темнота регулирует глубину самых тёмных участков — от глубокой канавки до уровня камня. Контраст 0 — точная копия этапа 2.",
+  moss:"Мох только для aged; для gold/cyclopean этап подтверждается без изменений.",
+  chips:"Сколы и выбоины до 200 штук. Заметность меняет цвет в albedo, глубина — рельеф в превью и в height/normal/AO.",
+  cracks:"Тонкие процедурные трещины. При 0 этап ничего не меняет.",
+  speckles:"Солнечные и тёмные минеральные вкрапления в духе OTWNDATA.",
+  albedo:"Итоговый albedo с запечённым AO. На этом этапе можно остановиться для 512.",
+  height:"Карта высот с фаской, швами и сколами. Трещины из этапа 6 в height не вырезаются.",
+  roughness:"Шероховатость поверхности камня; согласована с albedo.",
+  ao:"Ambient occlusion по height.",
+  normal_gl:"Normal map для OpenGL (Y+).",
+  normal_dx:"Normal map для DirectX (Y−)."
+};
+let job = null;
+let jobs = [];
+let pollTimer = null;
+let formDirty = false;
+let interactionLock = 0;
+const stageRunTimers = {};
+const stageRunningClient = {};
+const stagePending = {};
+
+function toast(msg, err=false){
+  const el=$("toast"); el.textContent=msg; el.className="toast"+(err?" err":"");
+  el.style.display="block"; clearTimeout(el._t);
+  el._t=setTimeout(()=>el.style.display="none", 5200);
+}
+async function api(path, opts={}){
+  const r=await fetch(path,{headers:{"Content-Type":"application/json"},...opts});
+  let data={}; try{data=await r.json()}catch(e){}
+  if(!r.ok) throw new Error(data.error || ("HTTP "+r.status));
+  return data;
+}
+function paramsFromForm(){
+  const p={};
+  for(const f of FIELDS){
+    const el=$(f);
+    if(!el) continue;
+    p[f]=el.type==="number" ? Number(el.value) : el.value;
+  }
+  return p;
+}
+function fillForm(p){
+  if(!p) return;
+  for(const f of FIELDS){ if($(f) && p[f]!==undefined) $(f).value=p[f]; }
+}
+function statusText(st){
+  return ({pending:"ожидает",running:"выполняется",ready:"готово к проверке",
+    approved:"подтверждено",failed:"ошибка",interrupted:"прервано"}[st]||st||"ожидает");
+}
+function dotClass(st){ return ({running:"running",ready:"ready",approved:"approved",
+  failed:"failed"}[st]||""); }
+
+function fmtNum(v, step){
+  const n=Number(v);
+  if(!Number.isFinite(n)) return String(v);
+  if(Number(step)>=1) return String(Math.round(n));
+  const dec=String(step).includes('.') ? String(step).split('.')[1].length : 2;
+  return n.toFixed(Math.min(3,dec));
+}
+function stageSpecs(stage){
+  return (job && job.stage_param_specs && job.stage_param_specs[stage]) || [];
+}
+function stageValue(stage, key){
+  const specs=stageSpecs(stage);
+  const sp=specs.find(x=>x.key===key);
+  return sp ? sp.value : 0;
+}
+function controlsHTML(stage, st, deps){
+  const specs=stageSpecs(stage);
+  if(!specs.length) return "";
+  const disabled = !job || !!job.running_stage || deps.length>0;
+  return `<div class="stage-controls">` + specs.map(sp=>{
+    const v=sp.value;
+    return `<div class="ctrl ${disabled?'disabled':''}">
+      <div class="top"><label for="sp-${stage}-${sp.key}">${sp.label}</label>
+        <span class="cval" id="cv-${stage}-${sp.key}">${fmtNum(v,sp.step)}</span></div>
+      <input type="range" id="sp-${stage}-${sp.key}" data-stage="${stage}"
+        data-key="${sp.key}" min="${sp.min}" max="${sp.max}" step="${sp.step}"
+        value="${v}" ${disabled?'disabled':''}>
+      ${sp.hint?`<div class="ch">${sp.hint}</div>`:""}
+    </div>`;
+  }).join("") + `</div>`;
+}
+function collectStageOverrides(stage){
+  const out={};
+  for(const sp of stageSpecs(stage)){
+    const el=$("sp-"+stage+"-"+sp.key);
+    if(el) out[sp.key]=Number(el.value);
+  }
+  return out;
+}
+function scheduleStageRun(stage){
+  clearTimeout(stageRunTimers[stage]);
+  stageRunTimers[stage]=setTimeout(()=>submitStageRun(stage), 380);
+}
+async function submitStageRun(stage){
+  if(!job) return;
+  if(stageRunningClient[stage]){
+    stagePending[stage]=true;
+    return;
+  }
+  const overrides=collectStageOverrides(stage);
+  stageRunningClient[stage]=true;
+  try{
+    await api("/api/job/"+job.id+"/run",{method:"POST",
+      body:JSON.stringify({stage,overrides})});
+    stagePending[stage]=false;
+    schedulePoll(250);
+  }catch(e){
+    toast(e.message,true);
+  }finally{
+    stageRunningClient[stage]=false;
+    if(stagePending[stage]){
+      stagePending[stage]=false;
+      scheduleStageRun(stage);
+    }
+  }
+}
+function onStageControlInput(e){
+  const el=e.target;
+  if(!el || el.tagName!=="INPUT" || el.type!=="range") return;
+  const stage=el.dataset.stage, key=el.dataset.key;
+  if(!stage || !key) return;
+  interactionLock=Date.now()+1400;
+  const sp=stageSpecs(stage).find(x=>x.key===key);
+  const cv=$("cv-"+stage+"-"+key);
+  if(cv && sp) cv.textContent=fmtNum(el.value,sp.step);
+  const old=stageValue(stage,key);
+  if(Number(el.value)===Number(old)) return;
+  scheduleStageRun(stage);
+}
+
+function renderJob(j){
+  job=j;
+  $("jobPill").textContent = j ? (j.params.variant+" · "+j.params.size+" px") : "нет задачи";
+  $("jobName").textContent = j ? j.name : "Задача не выбрана";
+  $("runState").innerHTML = j && j.running_stage
+    ? '<span class="dot running"></span> выполняется: '+LABELS[j.running_stage]
+    : "";
+  $("applyBtn").disabled = !j;
+  ["clone2kBtn","cloneAgedBtn","cloneCycBtn","resetBtn","deleteBtn"].forEach(id=>$(id).disabled=!j);
+  $("bothVariantsBtn").disabled = !j || !j.stage_order.every(s=>j.stages[s]?.approved);
+  const finalMaps=["albedo","height","roughness","ao","normal_gl","normal_dx"];
+  $("publishBtn").disabled = !j || !finalMaps.every(s=>j.stages[s]?.approved);
+  if(j && !formDirty) fillForm(j.params);
+  const stages = j ? j.stage_order : Object.keys(LABELS);
+  const wrap=$("stages"); wrap.innerHTML="";
+  let approved=0;
+  for(const s of stages){
+    const st = j ? j.stages[s] : {status:"pending"};
+    if(st.approved) approved++;
+    const card=document.createElement("section");
+    card.className="stage "+st.status;
+    const deps=(j?j.stage_deps[s]:[]).filter(d=>!j.stages[d]?.approved);
+    const runDisabled = !j || !!j.running_stage || deps.length>0;
+    const ready = st.status==="ready";
+    const running = st.status==="running";
+    const approvedFlag = !!st.approved;
+    const preview = st.preview_url
+      ? `<img src="${st.preview_url}" alt="${LABELS[s]}" onclick="openModal('${st.preview_url}')">`
+      : `<div class="preview-empty">${running?"идёт генерация…":"превью появится после запуска"}</div>`;
+    const exports = st.export_urls && Object.keys(st.export_urls).length
+      ? `<div class="exports">${Object.keys(st.export_urls).map(n=>
+          `<a href="${st.export_urls[n]}" download>${n}.png</a>`).join("")}</div>` : "";
+    const controls = j ? controlsHTML(s, st, deps) : "";
+    const buttons = j ? `
+      <button class="primary" ${runDisabled?"disabled":""}
+        onclick="runStage('${s}')">${running?"Выполняется…":(st.status==="pending"?"Запустить":"Перезапустить")}</button>
+      <button class="good" ${(!ready||approvedFlag||running||deps.length)?"disabled":""}
+        onclick="approveStage('${s}')">${approvedFlag?"Подтверждено":"Подтвердить"}</button>
+      <button class="warn" ${running?"disabled":""} onclick="resetStage('${s}')">Сброс</button>
+    ` : "";
+    card.innerHTML=`
+      <div class="stage-head">
+        <span class="stage-num">${s}</span>
+        <span class="stage-title">${LABELS[s]}</span>
+        <span class="badge ${st.status}">${statusText(st.status)}</span>
+        <span class="right">
+          ${running?'<span class="dot running"></span>':""}
+          ${st.seconds?`<span class="hint">${st.seconds} c</span>`:""}
+          ${buttons}
+        </span>
+      </div>
+      <div class="stage-body">
+        <div class="preview-box">${preview}</div>
+        <div class="stage-info">
+          <p>${DESCS[s]||""}</p>
+          ${controls}
+          <div class="msg">${st.message||""}</div>
+          ${deps.length?`<div class="deps">Сначала подтвердите: ${deps.map(d=>LABELS[d]).join(", ")}</div>`:""}
+          ${exports}
+        </div>
+      </div>`;
+    wrap.appendChild(card);
+  }
+  if(j){
+    const total=stages.length;
+    $("progress").textContent = `${approved} / ${total} этапов подтверждено`;
+  } else {
+    $("progress").textContent = "";
+  }
+  renderLog(j);
+}
+function renderLog(j){
+  const el=$("log");
+  if(!j || !j.log || !j.log.length){el.textContent="—";return;}
+  el.textContent=j.log.map(x=>x.t+"  "+x.text).join("\n");
+}
+function renderJobs(){
+  const sel=$("jobSelect");
+  sel.innerHTML = jobs.length?jobs.map(j=>
+    `<option value="${j.id}">${j.name} — ${j.params.variant} ${j.params.size}px</option>`).join("")
+    : '<option value="">— нет задач —</option>';
+  if(job && jobs.some(x=>x.id===job.id)) sel.value=job.id;
+}
+async function loadJob(id){
+  if(!id) return;
+  try{
+    job=await api("/api/job/"+id);
+    formDirty=false;
+    renderJob(job);
+    schedulePoll();
+  }catch(e){ toast(e.message,true); }
+}
+async function loadJobs(){
+  try{
+    const d=await api("/api/jobs"); jobs=d.jobs||[];
+    renderJobs();
+    if(!job && jobs.length) return loadJob(jobs[0].id);
+    if(job && !jobs.some(x=>x.id===job.id)) return loadJob(jobs[0]?.id);
+  }catch(e){ toast(e.message,true); }
+}
+function schedulePoll(){
+  clearTimeout(pollTimer);
+  const ms = job && job.running_stage ? 900 : 2500;
+  pollTimer=setTimeout(poll,ms);
+}
+async function poll(){
+  if(Date.now()<interactionLock){ schedulePoll(); return; }
+  if(job){ try{ job=await api("/api/job/"+job.id); renderJob(job); }catch(e){} }
+  await loadJobs();
+  schedulePoll();
+}
+async function createJob(){
+  try{
+    const j=await api("/api/jobs",{method:"POST",body:JSON.stringify({
+      name:$("name").value, params:paramsFromForm()})});
+    job=j.id; jobs.unshift(j); formDirty=false; renderJobs(); await loadJob(j.id);
+    toast("Задача создана");
+  }catch(e){ toast(e.message,true); }
+}
+async function applyParams(){
+  if(!job) return;
+  try{
+    const oldHash=job.hash;
+    const j=await api("/api/job/"+job.id+"/params",{method:"POST",
+      body:JSON.stringify({params:paramsFromForm()})});
+    formDirty=false; await loadJob(j.id);
+    toast(j.hash!==oldHash ? "Параметры изменены; подтверждения сброшены" : "Параметры сохранены");
+  }catch(e){ toast(e.message,true); }
+}
+async function runStage(stage){
+  if(!job) return;
+  try{
+    await api("/api/job/"+job.id+"/run",{method:"POST",body:JSON.stringify({stage})});
+    schedulePoll(); toast("Этап запущен: "+LABELS[stage]);
+  }catch(e){ toast(e.message,true); }
+}
+async function approveStage(stage){
+  if(!job) return;
+  try{
+    job=await api("/api/job/"+job.id+"/approve",{method:"POST",body:JSON.stringify({stage})});
+    renderJob(job); schedulePoll();
+  }catch(e){ toast(e.message,true); }
+}
+async function resetStage(stage){
+  if(!job) return;
+  if(!confirm("Сбросить этап «"+LABELS[stage]+"» и все последующие?")) return;
+  try{
+    job=await api("/api/job/"+job.id+"/reset",{method:"POST",body:JSON.stringify({stage})});
+    renderJob(job); schedulePoll();
+  }catch(e){ toast(e.message,true); }
+}
+async function deleteJob(){
+  if(!job) return;
+  if(!confirm("Удалить задачу «"+job.name+"» вместе со всем кэшем и экспортом? Это действие необратимо.")) return;
+  try{
+    await api("/api/job/"+job.id,{method:"DELETE"});
+    job=null; await loadJobs();
+    if(jobs.length) await loadJob(jobs[0].id); else renderJob(null);
+    toast("Задача удалена");
+  }catch(e){ toast(e.message,true); }
+}
+async function cloneJob(variant,size){
+  if(!job) return;
+  try{
+    const j=await api("/api/job/"+job.id+"/clone",{method:"POST",body:JSON.stringify({
+      variant:variant||null,size:size||null})});
+    await loadJobs(); job=j.id; await loadJob(j.id); toast("Создан клон задачи");
+  }catch(e){ toast(e.message,true); }
+}
+async function publishMaps(){
+  if(!job) return;
+  if(!confirm("Скопировать подтверждённые карты в textures_otwn/"+job.params.variant+"? Существующие файлы с теми же именами будут заменены.")) return;
+  try{
+    const d=await api("/api/job/"+job.id+"/publish",{method:"POST",body:"{}"});
+    toast("Опубликовано: "+d.directory);
+  }catch(e){ toast(e.message,true); }
+}
+async function createBothVariants(){
+  if(!job) return;
+  try{
+    const a=await api("/api/job/"+job.id+"/clone",{method:"POST",body:JSON.stringify({
+      variant:"aged",size:job.params.size})});
+    const b=await api("/api/job/"+job.id+"/clone",{method:"POST",body:JSON.stringify({
+      variant:"cyclopean",size:job.params.size})});
+    await loadJobs(); job=a.id; await loadJob(a.id);
+    toast("Созданы aged ("+a.params.size+"px) и cyclopean ("+b.params.size+"px). Запускайте этапы по очереди.");
+  }catch(e){ toast(e.message,true); }
+}
+function openModal(url){
+  $("modalImg").src=url; $("modal").classList.add("open");
+}
+$("modal").addEventListener("click",()=>$("modal").classList.remove("open"));
+$("jobSelect").addEventListener("change",e=>loadJob(e.target.value));
+for(const f of FIELDS){ const el=$(f); if(el) el.addEventListener("input",()=>formDirty=true); }
+$("stages").addEventListener("input", onStageControlInput);
+$("createBtn").addEventListener("click",createJob);
+$("applyBtn").addEventListener("click",applyParams);
+$("clone2kBtn").addEventListener("click",()=>cloneJob(null,2048));
+$("cloneAgedBtn").addEventListener("click",()=>cloneJob("aged",null));
+$("cloneCycBtn").addEventListener("click",()=>cloneJob("cyclopean",null));
+$("bothVariantsBtn").addEventListener("click",createBothVariants);
+$("publishBtn").addEventListener("click",publishMaps);
+$("deleteBtn").addEventListener("click",deleteJob);
+$("resetBtn").addEventListener("click",()=>{
+  if(!job) return;
+  if(confirm("Полностью сбросить подтверждения текущей задачи? Кэш файлов сохранится.")){
+    resetStage(job.stage_order[0]);
+  }
+});
+(async()=>{ await loadJobs(); if(!job) renderJob(null); })();
+</script>
+</body>
+</html>

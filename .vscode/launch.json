@@ -1,0 +1,67 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Python: OTWN Editor",
+      "type": "python",
+      "request": "launch",
+      "program": "${workspaceFolder}/otwn_editor.py",
+      "args": [
+        "--no-open",
+        "--port",
+        "8765"
+      ],
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "justMyCode": false,
+      "env": {
+        "PYTHONUNBUFFERED": "1"
+      },
+      "preLaunchTask": "OTWN: stop editor on 8765"
+    },
+    {
+      "name": "Python: Generator CLI (512 gold)",
+      "type": "python",
+      "request": "launch",
+      "program": "${workspaceFolder}/make_otwn_textures.py",
+      "args": [
+        "--size",
+        "512",
+        "--variants",
+        "gold"
+      ],
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "justMyCode": false,
+      "env": {
+        "PYTHONUNBUFFERED": "1"
+      }
+    },
+    {
+      "name": "Yandex: OTWN Editor",
+      "type": "pwa-chrome",
+      "request": "launch",
+      "url": "http://127.0.0.1:8765/",
+      "webRoot": "${workspaceFolder}",
+      "runtimeExecutable": "C:\\Program Files\\Yandex\\YandexBrowser\\Application\\browser.exe",
+      "runtimeArgs": [
+        "--no-first-run",
+        "--no-default-browser-check"
+      ],
+      "userDataDir": "${workspaceFolder}/.vscode/yandex-debug-profile",
+      "sourceMaps": false,
+      "preLaunchTask": "OTWN: wait for editor",
+      "smartStep": true
+    }
+  ],
+  "compounds": [
+    {
+      "name": "OTWN: Editor + Yandex",
+      "configurations": [
+        "Python: OTWN Editor",
+        "Yandex: OTWN Editor"
+      ],
+      "stopAll": true
+    }
+  ]
+}

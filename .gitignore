@@ -1,0 +1,18 @@
+# Python
+__pycache__/
+*.py[cod]
+
+# Runtime editor jobs and caches
+editor_data/
+
+# VS Code Yandex debugging profile
+.vscode/yandex-debug-profile/
+
+# Generated textures / previews
+textures_otwn/
+*.npz
+
+# Local archives and temporary exports
+*.7z
+*.zip
+*.tmp

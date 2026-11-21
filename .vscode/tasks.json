@@ -1,0 +1,58 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "OTWN: wait for editor",
+      "type": "shell",
+      "command": "powershell",
+      "args": [
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-File",
+        "${workspaceFolder}/.vscode/wait-for-editor.ps1"
+      ],
+      "problemMatcher": [],
+      "presentation": {
+        "reveal": "silent",
+        "panel": "dedicated",
+        "clear": true
+      }
+    },
+    {
+      "label": "OTWN: stop editor on 8765",
+      "type": "shell",
+      "command": "powershell",
+      "args": [
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-Command",
+        "$c = Get-NetTCPConnection -LocalPort 8765 -State Listen -ErrorAction SilentlyContinue | Select-Object -First 1; if ($c) { Stop-Process -Id $c.OwningProcess -Force }"
+      ],
+      "problemMatcher": []
+    },
+    {
+      "label": "OTWN: open in Yandex",
+      "type": "shell",
+      "command": "C:\\Program Files\\Yandex\\YandexBrowser\\Application\\browser.exe",
+      "args": [
+        "http://127.0.0.1:8765/"
+      ],
+      "problemMatcher": []
+    },
+    {
+      "label": "OTWN: compile Python",
+      "type": "shell",
+      "command": "python",
+      "args": [
+        "-m",
+        "py_compile",
+        "make_otwn_textures.py",
+        "otwn_pipeline.py",
+        "otwn_editor.py"
+      ],
+      "problemMatcher": []
+    }
+  ]
+}
