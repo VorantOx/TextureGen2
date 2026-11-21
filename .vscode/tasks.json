@@ -3,8 +3,8 @@
   "tasks": [
     {
       "label": "OTWN: wait for editor",
-      "type": "shell",
-      "command": "powershell",
+      "type": "process",
+      "command": "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
       "args": [
         "-NoProfile",
         "-ExecutionPolicy",
@@ -21,20 +21,20 @@
     },
     {
       "label": "OTWN: stop editor on 8765",
-      "type": "shell",
-      "command": "powershell",
+      "type": "process",
+      "command": "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
       "args": [
         "-NoProfile",
         "-ExecutionPolicy",
         "Bypass",
-        "-Command",
-        "$c = Get-NetTCPConnection -LocalPort 8765 -State Listen -ErrorAction SilentlyContinue | Select-Object -First 1; if ($c) { Stop-Process -Id $c.OwningProcess -Force }"
+        "-File",
+        "${workspaceFolder}/.vscode/stop-editor.ps1"
       ],
       "problemMatcher": []
     },
     {
       "label": "OTWN: open in Yandex",
-      "type": "shell",
+      "type": "process",
       "command": "C:\\Program Files\\Yandex\\YandexBrowser\\Application\\browser.exe",
       "args": [
         "http://127.0.0.1:8765/"
@@ -43,8 +43,8 @@
     },
     {
       "label": "OTWN: compile Python",
-      "type": "shell",
-      "command": "python",
+      "type": "process",
+      "command": "C:\\Python39\\python.exe",
       "args": [
         "-m",
         "py_compile",
@@ -52,6 +52,9 @@
         "otwn_pipeline.py",
         "otwn_editor.py"
       ],
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
       "problemMatcher": []
     }
   ]
