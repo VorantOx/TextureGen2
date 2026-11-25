@@ -28,12 +28,22 @@ from urllib.parse import unquote, urlparse
 
 import numpy as np
 import otwn_pipeline as pipeline
+import otwn_surface_pipeline as surface_pipeline
 
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 EDITOR_DIR = os.path.join(BASE_DIR, "editor_data")
 JOBS_DIR = os.path.join(EDITOR_DIR, "jobs")
 HTML_PATH = os.path.join(BASE_DIR, "otwn_editor.html")
+
+MODULES = {
+    "wall": pipeline,
+    "surface": surface_pipeline,
+}
+
+
+def module_for(kind: str):
+    return MODULES.get(kind, pipeline)
 
 
 def now() -> float:
@@ -76,6 +86,28 @@ class JobManager:
     def job_file(self, jid: str) -> str:
         return os.path.join(self.job_dir(jid), "job.json")
 
+    def _normalize_job(self, job) -> dict:
+        job.setdefault("kind", "wall")
+        job.setdefault("stage_params", {})
+        job.setdefault("topology_edit",
+                       pipeline.normalize_topology_edit(None))
+        job.setdefault("stages", {})
+        mod = module_for(job["kind"])
+        job["params"] = mod.normalize_params(job.get("params") or {})
+        job["stage_params"] = mod.normalize_stage_params(
+            job.get("stage_params") or {})
+        job["hash"] = mod.params_hash(job["params"])
+        for stage in mod.STAGE_ORDER:
+            job["stages"].setdefault(stage, {
+                "status": "pending",
+                "approved": False,
+                "message": "новый этап — запустите его",
+                "preview": False,
+                "exports": [],
+                "seconds": None,
+            })
+        return job
+
     def load_all(self) -> None:
         for name in os.listdir(self.root):
             p = os.path.join(self.root, name, "job.json")
@@ -84,9 +116,7 @@ class JobManager:
             job = _read_json(p)
             if not job or not job.get("id"):
                 continue
-            job.setdefault("stage_params", {})
-            job.setdefault("topology_edit",
-                           pipeline.normalize_topology_edit(None))
+            self._normalize_job(job)
             self.jobs[job["id"]] = job
             self.sync_job(job)
             self.save(job)
@@ -96,9 +126,7 @@ class JobManager:
             job = self.jobs.get(jid)
             if not job:
                 raise KeyError("Задача не найдена")
-            job.setdefault("stage_params", {})
-            job.setdefault("topology_edit",
-                           pipeline.normalize_topology_edit(None))
+            self._normalize_job(job)
             self.sync_job(job)
             return job
 
@@ -108,35 +136,50 @@ class JobManager:
     # ------------------------------------------------------------------
     # creation / params
     # ------------------------------------------------------------------
-    def _pipeline(self, job) -> pipeline.Pipeline:
+    def _pipeline(self, job) -> object:
+        if job.get("kind") == "surface":
+            return surface_pipeline.Pipeline(
+                self.job_dir(job["id"]), job["params"],
+                job.get("stage_params") or {})
         return pipeline.Pipeline(self.job_dir(job["id"]), job["params"],
                                  job.get("stage_params") or {},
                                  job.get("topology_edit") or {})
 
     def create(self, params, name: str = "", source: str = "",
-               stage_params=None) -> dict:
-        params = pipeline.normalize_params(params)
+               stage_params=None, kind: str = "wall") -> dict:
+        kind = "surface" if kind == "surface" else "wall"
+        mod = module_for(kind)
+        params = mod.normalize_params(params)
         jid = uuid.uuid4().hex[:10]
         d = self.job_dir(jid)
         os.makedirs(os.path.join(d, "cache"), exist_ok=True)
         os.makedirs(os.path.join(d, "previews"), exist_ok=True)
         os.makedirs(os.path.join(d, "exports"), exist_ok=True)
+        clean_name = (name or "").strip()
+        if not clean_name:
+            if kind == "surface":
+                clean_name = "%s %s %d px" % (
+                    surface_pipeline.SURFACE_LABELS.get(
+                        params["surface"], params["surface"]),
+                    params["variant"], params["size"])
+            else:
+                clean_name = "%s %d px" % (params["variant"], params["size"])
         job = {
             "id": jid,
-            "name": name.strip() or ("%s %d px" % (params["variant"],
-                                                   params["size"])),
+            "kind": kind,
+            "name": clean_name,
             "created": now(),
             "updated": now(),
             "params": params,
-            "stage_params": pipeline.normalize_stage_params(stage_params),
+            "stage_params": mod.normalize_stage_params(stage_params),
             "topology_edit": pipeline.normalize_topology_edit(None),
-            "hash": pipeline.params_hash(params),
+            "hash": mod.params_hash(params),
             "running_stage": None,
             "stages": {},
             "log": [],
             "source": source,
         }
-        for stage in pipeline.STAGE_ORDER:
+        for stage in mod.STAGE_ORDER:
             job["stages"][stage] = {
                 "status": "pending",
                 "approved": False,
@@ -145,7 +188,7 @@ class JobManager:
                 "exports": [],
                 "seconds": None,
             }
-        self._log(job, "Создана задача %s" % jid)
+        self._log(job, "Создана задача %s (%s)" % (jid, kind))
         with self.lock:
             self.jobs[jid] = job
             self.save(job)
@@ -153,16 +196,17 @@ class JobManager:
 
     def update_params(self, jid: str, params) -> dict:
         job = self.get(jid)
+        mod = module_for(job.get("kind", "wall"))
         with self.lock:
             if job.get("running_stage"):
                 raise RuntimeError("Нельзя менять параметры, пока этап выполняется")
-            new_params = pipeline.normalize_params(params)
-            new_hash = pipeline.params_hash(new_params)
+            new_params = mod.normalize_params(params)
+            new_hash = mod.params_hash(new_params)
             old_hash = job.get("hash")
             job["params"] = new_params
             if new_hash != old_hash:
                 job["hash"] = new_hash
-                for st in pipeline.STAGE_ORDER:
+                for st in mod.STAGE_ORDER:
                     job["stages"][st] = {
                         "status": "pending",
                         "approved": False,
@@ -179,18 +223,20 @@ class JobManager:
             return job
 
     def publish(self, jid: str) -> dict:
-        """Copy approved final maps into textures_otwn/<variant>/."""
+        """Copy approved final maps into textures_otwn/<variant>[/<surface>]/."""
         job = self.get(jid)
-        required = ["albedo", "height", "roughness", "ao",
-                    "normal_gl", "normal_dx"]
+        mod = module_for(job.get("kind", "wall"))
+        required = list(mod.FINAL_MAPS)
         missing = [s for s in required
                    if not job["stages"][s].get("approved")]
         if missing:
             raise RuntimeError(
                 "Сначала подтвердите финальные карты: %s"
-                % ", ".join(pipeline.STAGE_LABELS.get(s, s) for s in missing))
+                % ", ".join(mod.STAGE_LABELS.get(s, s) for s in missing))
         p = self._pipeline(job)
         dest = os.path.join(BASE_DIR, "textures_otwn", job["params"]["variant"])
+        if job.get("kind") == "surface":
+            dest = os.path.join(dest, job["params"]["surface"])
         os.makedirs(dest, exist_ok=True)
         files = []
         for name in required:
@@ -226,11 +272,18 @@ class JobManager:
             params["variant"] = str(variant)
         if size:
             params["size"] = int(size)
+        kind = src.get("kind", "wall")
         if not name:
-            name = "%s / %s %d px" % (
-                src.get("name", src["id"]), params["variant"], params["size"])
+            label = ""
+            if kind == "surface":
+                label = " " + surface_pipeline.SURFACE_LABELS.get(
+                    params.get("surface"), params.get("surface", ""))
+            name = "%s / %s%s %d px" % (
+                src.get("name", src["id"]), params["variant"], label,
+                params["size"])
         return self.create(params, name=name, source=jid,
-                           stage_params=src.get("stage_params") or {})
+                           stage_params=src.get("stage_params") or {},
+                           kind=kind)
 
     # ------------------------------------------------------------------
     # stage status
@@ -275,6 +328,7 @@ class JobManager:
             st["message"] = "кэш этапа отсутствует — запустите заново"
 
     def sync_job(self, job) -> None:
+        mod = module_for(job.get("kind", "wall"))
         with self.lock:
             if job.get("running_stage"):
                 # A crash can leave this flag behind; a live worker clears it.
@@ -284,7 +338,7 @@ class JobManager:
                 t = self.threads.get(rs)
                 if t is None or not t.is_alive():
                     job["running_stage"] = None
-            for stage in pipeline.STAGE_ORDER:
+            for stage in mod.STAGE_ORDER:
                 self._auto_discover(job, stage)
             # Exports are discovered from the directory too, so a restart
             # does not lose links.
@@ -294,31 +348,20 @@ class JobManager:
             except Exception:
                 pass
             if p:
-                for stage in pipeline.STAGE_ORDER:
+                for stage in mod.STAGE_ORDER:
                     st = job["stages"][stage]
-                    names = []
-                    for name in ("albedo", "height", "roughness", "ao",
-                                 "normal_gl", "normal_dx"):
-                        if os.path.exists(p.export_path(name)):
-                            names.append(name)
-                    # Only show the maps that belong to this stage, plus
-                    # inherited maps are still useful on later confirmations.
-                    mine = {
-                        "albedo": ["albedo"],
-                        "height": ["height"],
-                        "roughness": ["roughness"],
-                        "ao": ["ao"],
-                        "normal_gl": ["normal_gl"],
-                        "normal_dx": ["normal_dx"],
-                    }.get(stage, [])
+                    mine = mod.STAGE_EXPORTS.get(stage, [])
                     if st.get("status") in ("ready", "approved"):
-                        st["exports"] = [n for n in mine if n in names]
-                    elif stage not in mine:
+                        st["exports"] = [
+                            n for n in mine if os.path.exists(p.export_path(n))
+                        ]
+                    else:
                         st["exports"] = []
 
     def dependency_status(self, job, stage: str) -> list:
+        mod = module_for(job.get("kind", "wall"))
         out = []
-        for dep in pipeline.STAGE_DEPS.get(stage, []):
+        for dep in mod.STAGE_DEPS.get(stage, []):
             st = job["stages"].get(dep, {})
             if not st.get("approved"):
                 out.append(dep)
@@ -349,6 +392,8 @@ class JobManager:
 
     def update_topology_edit(self, jid: str, edit) -> dict:
         job = self.get(jid)
+        if job.get("kind", "wall") != "wall":
+            raise RuntimeError("Интерактивная топология доступна только для стен")
         with self.lock:
             if job.get("running_stage"):
                 raise RuntimeError("Нельзя менять топологию, пока этап выполняется")
@@ -370,9 +415,10 @@ class JobManager:
         return job
 
     def run(self, jid: str, stage: str, overrides=None) -> dict:
-        if stage not in pipeline.STAGE_ORDER:
-            raise ValueError("Неизвестный этап")
         job = self.get(jid)
+        mod = module_for(job.get("kind", "wall"))
+        if stage not in mod.STAGE_ORDER:
+            raise ValueError("Неизвестный этап")
         with self.lock:
             if job.get("running_stage"):
                 raise RuntimeError("Уже выполняется этап %s" % job["running_stage"])
@@ -386,11 +432,11 @@ class JobManager:
                 merged_stage.update(overrides)
                 merged = dict(current)
                 merged[stage] = merged_stage
-                norm = pipeline.normalize_stage_params(merged)
+                norm = mod.normalize_stage_params(merged)
                 if norm.get(stage, {}) != (current.get(stage) or {}):
                     job["stage_params"] = norm
-                    idx = pipeline.STAGE_ORDER.index(stage)
-                    for s in pipeline.STAGE_ORDER[idx:]:
+                    idx = mod.STAGE_ORDER.index(stage)
+                    for s in mod.STAGE_ORDER[idx:]:
                         self._remove_stage_files(job, s)
                         st0 = job["stages"][s]
                         st0["status"] = "pending"
@@ -399,14 +445,14 @@ class JobManager:
                         st0["exports"] = []
                         st0["message"] = "параметры этапа изменены — нужен повтор"
                     self._log(job, "Параметры этапа %s обновлены"
-                              % pipeline.STAGE_LABELS.get(stage, stage))
+                              % mod.STAGE_LABELS.get(stage, stage))
                     self.save(job)
 
             deps = self.dependency_status(job, stage)
             if deps:
                 raise RuntimeError(
                     "Сначала подтвердите предыдущие этапы: %s"
-                    % ", ".join(pipeline.STAGE_LABELS.get(d, d) for d in deps))
+                    % ", ".join(mod.STAGE_LABELS.get(d, d) for d in deps))
             st = job["stages"][stage]
             st["status"] = "running"
             st["approved"] = False
@@ -414,7 +460,7 @@ class JobManager:
             st["seconds"] = None
             job["running_stage"] = stage
             job["updated"] = now()
-            self._log(job, "Запуск этапа %s" % pipeline.STAGE_LABELS.get(stage, stage))
+            self._log(job, "Запуск этапа %s" % mod.STAGE_LABELS.get(stage, stage))
             self.save(job)
             t = threading.Thread(target=self._worker, args=(jid, stage),
                                  daemon=True)
@@ -436,6 +482,7 @@ class JobManager:
             job = self.jobs.get(jid)
             if not job:
                 return
+            mod = module_for(job.get("kind", "wall"))
             job["running_stage"] = None
             self.threads.pop(stage, None)
             st = job["stages"][stage]
@@ -454,8 +501,8 @@ class JobManager:
                 # A rerun invalidates downstream confirmations and their
                 # caches.  Otherwise a restart could mistake an old downstream
                 # array for a result of the newly generated upstream stage.
-                idx = pipeline.STAGE_ORDER.index(stage)
-                for later in pipeline.STAGE_ORDER[idx + 1:]:
+                idx = mod.STAGE_ORDER.index(stage)
+                for later in mod.STAGE_ORDER[idx + 1:]:
                     self._remove_stage_files(job, later)
                     ls = job["stages"][later]
                     ls["status"] = "pending"
@@ -470,6 +517,7 @@ class JobManager:
 
     def approve(self, jid: str, stage: str) -> dict:
         job = self.get(jid)
+        mod = module_for(job.get("kind", "wall"))
         with self.lock:
             st = job["stages"][stage]
             if st.get("status") == "running":
@@ -480,24 +528,25 @@ class JobManager:
             if deps:
                 raise RuntimeError(
                     "Сначала подтвердите предыдущие этапы: %s"
-                    % ", ".join(pipeline.STAGE_LABELS.get(d, d) for d in deps))
+                    % ", ".join(mod.STAGE_LABELS.get(d, d) for d in deps))
             st["approved"] = True
             st["message"] = st.get("message") or "подтверждено"
             job["updated"] = now()
             self._log(job, "Подтверждён этап %s" %
-                      pipeline.STAGE_LABELS.get(stage, stage))
+                      mod.STAGE_LABELS.get(stage, stage))
             self.save(job)
         return job
 
     def reset(self, jid: str, stage: str) -> dict:
         job = self.get(jid)
+        mod = module_for(job.get("kind", "wall"))
         with self.lock:
             if job.get("running_stage"):
                 raise RuntimeError("Нельзя сбрасывать, пока этап выполняется")
-            if stage not in pipeline.STAGE_ORDER:
+            if stage not in mod.STAGE_ORDER:
                 raise ValueError("Неизвестный этап")
-            idx = pipeline.STAGE_ORDER.index(stage)
-            for s in pipeline.STAGE_ORDER[idx:]:
+            idx = mod.STAGE_ORDER.index(stage)
+            for s in mod.STAGE_ORDER[idx:]:
                 self._remove_stage_files(job, s)
                 st = job["stages"][s]
                 st["status"] = "pending"
@@ -515,25 +564,29 @@ class JobManager:
     # ------------------------------------------------------------------
     def public(self, job) -> dict:
         self.sync_job(job)
+        mod = module_for(job.get("kind", "wall"))
         d = {
             "id": job["id"],
+            "kind": job.get("kind", "wall"),
             "name": job.get("name"),
             "created": job.get("created"),
             "updated": job.get("updated"),
             "params": job["params"],
             "stage_params": job.get("stage_params") or {},
             "topology_edit": job.get("topology_edit") or {},
-            "stage_param_specs": pipeline.resolved_stage_specs(
+            "stage_param_specs": mod.resolved_stage_specs(
                 job["params"], job.get("stage_params") or {}),
             "hash": job.get("hash"),
             "running_stage": job.get("running_stage"),
             "stages": {},
             "log": list(reversed(job.get("log", [])))[:40],
-            "stage_order": pipeline.STAGE_ORDER,
-            "stage_labels": pipeline.STAGE_LABELS,
-            "stage_deps": pipeline.STAGE_DEPS,
+            "stage_order": list(mod.STAGE_ORDER),
+            "stage_labels": dict(mod.STAGE_LABELS),
+            "stage_descs": dict(getattr(mod, "STAGE_DESCS", {})),
+            "stage_deps": dict(mod.STAGE_DEPS),
+            "final_maps": list(mod.FINAL_MAPS),
         }
-        for stage in pipeline.STAGE_ORDER:
+        for stage in mod.STAGE_ORDER:
             st = dict(job["stages"][stage])
             prev = st.get("preview", False)
             st["preview_url"] = ("/preview/%s/%s?v=%s" %
@@ -544,7 +597,7 @@ class JobManager:
                                         int(job.get("updated", 0)))
                 for n in st.get("exports", [])
             }
-            if stage == "topology":
+            if stage == "topology" and job.get("kind", "wall") == "wall":
                 try:
                     p = self._pipeline(job)
                     st["idmap_url"] = ("/idmap/%s/topology?v=%s" %
@@ -569,6 +622,7 @@ class JobManager:
             items.sort(key=lambda j: j.get("updated", 0), reverse=True)
             return [{
                 "id": j["id"],
+                "kind": j.get("kind", "wall"),
                 "name": j.get("name"),
                 "params": j.get("params"),
                 "created": j.get("created"),
@@ -635,6 +689,12 @@ class Handler(BaseHTTPRequestHandler):
             if path == "/api/jobs":
                 self._send_json({"jobs": MANAGER.list_public()})
                 return
+            if path == "/api/meta":
+                self._send_json({
+                    "wall": pipeline.meta(),
+                    "surface": surface_pipeline.meta(),
+                })
+                return
             m = re.fullmatch(r"/api/job/([a-f0-9]{10})", path)
             if m:
                 self._send_json(MANAGER.public(self._job(m.group(1))))
@@ -686,7 +746,8 @@ class Handler(BaseHTTPRequestHandler):
             body = self._read_body()
             if path == "/api/jobs":
                 job = MANAGER.create(body.get("params") or {},
-                                     name=body.get("name") or "")
+                                     name=body.get("name") or "",
+                                     kind=body.get("kind") or "wall")
                 self._send_json(MANAGER.public(job), HTTPStatus.CREATED)
                 return
             m = re.fullmatch(r"/api/job/([a-f0-9]{10})/params", path)

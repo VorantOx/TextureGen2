@@ -76,6 +76,58 @@ STAGE_DEPS: Dict[str, List[str]] = {
     "normal_dx": ["normal_gl"],
 }
 
+STAGE_DESCS: Dict[str, str] = {
+    "topology": "Схема ячеек и швов. «Ширина шва» задаёт ширину тёмной "
+                "полосы; «Скругление» плавно округляет большие камни, а "
+                "средние растягиваются в промежутки. При наведении большие "
+                "камни подсвечиваются синим, остальные — жёлтым. Seed и "
+                "параметры раскладки — в левой панели.",
+    "color": "Базовые цвета камней и лёгкая вариация породы. Швы ещё не "
+             "наложены.",
+    "seams": "Сглаживание задаётся в % от радиуса каждого камня; "
+             "контрастность проявляет границу; темнота регулирует глубину "
+             "самых тёмных участков. Ширина шва задаётся на этапе 1. "
+             "Контраст 0 — точная копия этапа 2.",
+    "moss": "Мох только для aged; для gold/cyclopean этап подтверждается "
+            "без изменений.",
+    "chips": "Сколы и выбоины до 200 штук. Заметность меняет цвет в albedo, "
+             "глубина — рельеф в превью и в height/normal/AO.",
+    "cracks": "Тонкие процедурные трещины. При 0 этап ничего не меняет.",
+    "speckles": "Солнечные и тёмные минеральные вкрапления в духе OTWNDATA.",
+    "albedo": "Итоговый albedo с запечённым AO. На этом этапе можно "
+              "остановиться для 512.",
+    "height": "Карта высот с фаской, швами и сколами. Трещины из этапа 6 "
+              "в height не вырезаются.",
+    "roughness": "Шероховатость поверхности камня; согласована с albedo.",
+    "ao": "Ambient occlusion по height.",
+    "normal_gl": "Normal map для OpenGL (Y+).",
+    "normal_dx": "Normal map для DirectX (Y−).",
+}
+
+FINAL_MAPS: List[str] = ["albedo", "height", "roughness", "ao",
+                         "normal_gl", "normal_dx"]
+
+STAGE_EXPORTS: Dict[str, List[str]] = {
+    "albedo": ["albedo"],
+    "height": ["height"],
+    "roughness": ["roughness"],
+    "ao": ["ao"],
+    "normal_gl": ["normal_gl"],
+    "normal_dx": ["normal_dx"],
+}
+
+
+def meta() -> Dict[str, Any]:
+    return {
+        "stage_order": list(STAGE_ORDER),
+        "stage_labels": dict(STAGE_LABELS),
+        "stage_descs": dict(STAGE_DESCS),
+        "stage_deps": dict(STAGE_DEPS),
+        "stage_param_specs": STAGE_PARAM_SPECS,
+        "default_params": dict(DEFAULT_PARAMS),
+        "final_maps": list(FINAL_MAPS),
+    }
+
 # Stage-local controls.  These are deliberately independent of the base
 # job parameters: adjusting one of them re-renders only that stage (and
 # invalidates the stages below it).  `default_from` resolves to a value in

@@ -40,6 +40,12 @@
   .card h2{font:600 15px Georgia,serif;color:var(--gold);margin:0 0 12px;
     letter-spacing:.04em}
   .grid2{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+  .mode-tabs{display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-bottom:12px}
+  .mode-tabs button{padding:8px 6px;font-size:12px}
+  .mode-tabs button.active{background:linear-gradient(#6b5226,#4a3418);
+    border-color:#b58e45;color:#fff3d4}
+  .mode-hint{font-size:11px;color:#8b7860;margin:-4px 0 10px;line-height:1.4}
+  .field.hidden{display:none}
   .field{display:flex;flex-direction:column;gap:4px;margin-bottom:9px}
   .field label{font-size:11px;color:var(--muted);text-transform:uppercase;
     letter-spacing:.05em}
@@ -130,7 +136,7 @@
 <body>
 <header>
   <h1>OTWN Texture Editor</h1>
-  <span class="sub">пошаговая генерация · кэш каждого этапа</span>
+  <span class="sub">стены · пол · потолок · пошаговая генерация · кэш каждого этапа</span>
   <span class="spacer"></span>
   <span class="pill" id="jobPill">нет задачи</span>
   <select id="jobSelect" style="width:250px" title="Открыть задачу"></select>
@@ -140,54 +146,134 @@
   <aside class="side">
     <div class="card">
       <h2>Новая генерация</h2>
+      <div class="mode-tabs">
+        <button class="mode-tab active" data-mode="wall">Стены</button>
+        <button class="mode-tab" data-mode="surface">Пол и потолок</button>
+      </div>
+      <div class="mode-hint" id="modeHint">Сложная неравномерная кладка камней
+        с интерактивной топологией.</div>
       <div class="field"><label for="name">Имя задачи</label>
         <input id="name" type="text" placeholder="например, gold 512 preview"></div>
-      <div class="grid2">
-        <div class="field"><label for="variant">Вариант</label>
-          <select id="variant">
-            <option value="gold">gold</option>
-            <option value="aged">aged</option>
-            <option value="cyclopean">cyclopean</option>
-          </select></div>
-        <div class="field"><label for="size">Размер</label>
-          <select id="size">
-            <option value="512">512 (быстрый)</option>
-            <option value="1024">1024</option>
-            <option value="2048">2048 (финал)</option>
-          </select></div>
+
+      <div id="wallFields">
+        <div class="grid2">
+          <div class="field"><label for="variant">Вариант</label>
+            <select id="variant">
+              <option value="gold">gold</option>
+              <option value="aged">aged</option>
+              <option value="cyclopean">cyclopean</option>
+            </select></div>
+          <div class="field"><label for="size">Размер</label>
+            <select id="size">
+              <option value="512">512 (быстрый)</option>
+              <option value="1024">1024</option>
+              <option value="2048">2048 (финал)</option>
+            </select></div>
+        </div>
+        <div class="field"><label for="seed">Seed</label>
+          <input id="seed" type="number" value="7" min="0" step="1"></div>
+        <div class="grid2">
+          <div class="field"><label for="spread">Spread</label>
+            <input id="spread" type="number" value="3.4" min="1" max="10" step="0.1"></div>
+          <div class="field"><label for="dome">Dome</label>
+            <input id="dome" type="number" value="0.9" min="0" max="2" step="0.05"></div>
+        </div>
+        <div class="grid2">
+          <div class="field"><label for="chip_count">Сколы</label>
+            <input id="chip_count" type="number" value="15" min="0" max="200" step="1"></div>
+          <div class="field"><label for="crack_count">Трещины</label>
+            <input id="crack_count" type="number" value="0" min="0" max="100" step="1"></div>
+        </div>
+        <div class="grid2">
+          <div class="field"><label for="medium_count">Средних камней</label>
+            <input id="medium_count" type="number" value="16" min="0" max="128" step="1"></div>
+          <div class="field"><label for="medium_area">Medium area</label>
+            <input id="medium_area" type="number" value="0.09" min="0" max="0.4" step="0.005"></div>
+        </div>
+        <div class="field"><label for="medium_min_px">Мин. радиус среднего, px@2048 (0 = выкл.)</label>
+          <input id="medium_min_px" type="number" value="40" min="0" max="256" step="1"></div>
+        <div class="field"><label for="normal_detail">Normal detail</label>
+          <input id="normal_detail" type="number" value="1.0" min="0" max="4" step="0.05"></div>
       </div>
-      <div class="field"><label for="seed">Seed</label>
-        <input id="seed" type="number" value="7" min="0" step="1"></div>
-      <div class="grid2">
-        <div class="field"><label for="spread">Spread</label>
-          <input id="spread" type="number" value="3.4" min="1" max="10" step="0.1"></div>
-        <div class="field"><label for="dome">Dome</label>
-          <input id="dome" type="number" value="0.9" min="0" max="2" step="0.05"></div>
+
+      <div id="surfaceFields" style="display:none">
+        <div class="grid2">
+          <div class="field"><label for="sf_surface">Поверхность</label>
+            <select id="sf_surface">
+              <option value="floor">Пол</option>
+              <option value="ceiling">Потолок</option>
+            </select></div>
+          <div class="field"><label for="sf_template">Шаблон плитки</label>
+            <select id="sf_template"></select></div>
+        </div>
+        <div class="grid2">
+          <div class="field"><label for="sf_variant">Цвет стен</label>
+            <select id="sf_variant">
+              <option value="gold">gold</option>
+              <option value="aged">aged</option>
+              <option value="cyclopean">cyclopean</option>
+            </select></div>
+          <div class="field"><label for="sf_size">Размер</label>
+            <select id="sf_size">
+              <option value="512">512 (быстрый)</option>
+              <option value="1024">1024</option>
+              <option value="2048">2048 (финал)</option>
+            </select></div>
+        </div>
+        <div class="grid2">
+          <div class="field"><label for="sf_seed">Seed</label>
+            <input id="sf_seed" type="number" value="7" min="0" step="1"></div>
+          <div class="field"><label for="sf_tiles">Плиток по стороне</label>
+            <input id="sf_tiles" type="number" value="4" min="2" max="16" step="1"></div>
+        </div>
+        <div class="grid2">
+          <div class="field"><label for="sf_grout_px">Шов, px@2048</label>
+            <input id="sf_grout_px" type="number" value="16" min="0" max="60" step="0.5"></div>
+          <div class="field"><label for="sf_bevel">Фаска</label>
+            <input id="sf_bevel" type="number" value="1.0" min="0" max="2" step="0.05"></div>
+        </div>
+        <div class="grid2">
+          <div class="field"><label for="sf_inset">Внутренняя рамка</label>
+            <input id="sf_inset" type="number" value="0.25" min="0.04" max="0.45" step="0.01"></div>
+          <div class="field"><label for="sf_tile_variation">Разброс цвета</label>
+            <input id="sf_tile_variation" type="number" value="1.0" min="0" max="2" step="0.05"></div>
+        </div>
+        <div class="grid2">
+          <div class="field"><label for="sf_accent_contrast">Контраст акцентов</label>
+            <input id="sf_accent_contrast" type="number" value="0.35" min="0" max="1" step="0.01"></div>
+          <div class="field"><label for="sf_harmony">Созвучие со стенами</label>
+            <input id="sf_harmony" type="number" value="0.7" min="0" max="1" step="0.01"></div>
+        </div>
+        <div class="grid2">
+          <div class="field"><label for="sf_wear">Износ</label>
+            <input id="sf_wear" type="number" value="0.35" min="0" max="1" step="0.01"></div>
+          <div class="field"><label for="sf_polish">Полировка</label>
+            <input id="sf_polish" type="number" value="0.45" min="0" max="1" step="0.01"></div>
+        </div>
+        <div class="grid2">
+          <div class="field"><label for="sf_veins">Прожилки</label>
+            <input id="sf_veins" type="number" value="1.0" min="0" max="2" step="0.05"></div>
+          <div class="field"><label for="sf_flecks">Вкрапления</label>
+            <input id="sf_flecks" type="number" value="1.0" min="0" max="2" step="0.05"></div>
+        </div>
+        <div class="grid2">
+          <div class="field"><label for="sf_crack_count">Трещины</label>
+            <input id="sf_crack_count" type="number" value="0" min="0" max="60" step="1"></div>
+          <div class="field"><label for="sf_tile_dome">Купол плитки</label>
+            <input id="sf_tile_dome" type="number" value="0.55" min="0" max="2" step="0.05"></div>
+        </div>
+        <div class="field"><label for="sf_normal_detail">Normal detail</label>
+          <input id="sf_normal_detail" type="number" value="1.0" min="0" max="4" step="0.05"></div>
       </div>
-      <div class="grid2">
-        <div class="field"><label for="chip_count">Сколы</label>
-          <input id="chip_count" type="number" value="15" min="0" max="200" step="1"></div>
-        <div class="field"><label for="crack_count">Трещины</label>
-          <input id="crack_count" type="number" value="0" min="0" max="100" step="1"></div>
-      </div>
-      <div class="grid2">
-        <div class="field"><label for="medium_count">Средних камней</label>
-          <input id="medium_count" type="number" value="16" min="0" max="128" step="1"></div>
-        <div class="field"><label for="medium_area">Medium area</label>
-          <input id="medium_area" type="number" value="0.09" min="0" max="0.4" step="0.005"></div>
-      </div>
-      <div class="field"><label for="medium_min_px">Мин. радиус среднего, px@2048 (0 = выкл.)</label>
-        <input id="medium_min_px" type="number" value="40" min="0" max="256" step="1"></div>
-      <div class="field"><label for="normal_detail">Normal detail</label>
-        <input id="normal_detail" type="number" value="1.0" min="0" max="4" step="0.05"></div>
+
       <div class="actions">
         <button class="primary" id="createBtn">Создать задачу</button>
         <button id="applyBtn" disabled>Применить к текущей</button>
       </div>
-      <div class="hint">512 — только для быстрой проверки albedo. После подтверждения
-        создайте клон 2048 для финальных карт. В карточке каждого этапа есть
-        свои ползунки; они пересчитывают только этот этап. Все массивы лежат в
-        <code>editor_data/jobs/&lt;id&gt;/cache</code>.</div>
+      <div class="hint" id="createHint">512 — только для быстрой проверки albedo. После
+        подтверждения создайте клон 2048 для финальных карт. В карточке
+        каждого этапа есть свои ползунки; они пересчитывают только этот этап.
+        Все массивы лежат в <code>editor_data/jobs/&lt;id&gt;/cache</code>.</div>
     </div>
 
     <div class="card">
@@ -234,6 +320,16 @@ const $ = (id) => document.getElementById(id);
 const FIELDS = ["size","seed","variant","dome","chip_count",
   "crack_count","spread","medium_count","medium_area","medium_min_px",
   "normal_detail"];
+const SURFACE_FORM = [
+  ["sf_surface","surface"], ["sf_template","template"],
+  ["sf_size","size"], ["sf_seed","seed"], ["sf_variant","variant"],
+  ["sf_tiles","tiles"], ["sf_grout_px","grout_px"], ["sf_bevel","bevel"],
+  ["sf_inset","inset"], ["sf_tile_variation","tile_variation"],
+  ["sf_accent_contrast","accent_contrast"], ["sf_harmony","harmony"],
+  ["sf_wear","wear"], ["sf_polish","polish"], ["sf_veins","veins"],
+  ["sf_flecks","flecks"], ["sf_crack_count","crack_count"],
+  ["sf_tile_dome","tile_dome"], ["sf_normal_detail","normal_detail"]
+];
 const LABELS = {
   topology:"1. Топология", color:"2. Цвет камней", seams:"3. Швы",
   moss:"4. Мох", chips:"5. Сколы", cracks:"6. Царапины",
@@ -256,6 +352,39 @@ const DESCS = {
   normal_gl:"Normal map для OpenGL (Y+).",
   normal_dx:"Normal map для DirectX (Y−)."
 };
+const SURFACE_LABELS = {
+  layout:"1. Раскладка плитки", color:"2. Цвет плитки",
+  grout:"3. Швы и затирка", wear:"4. Износ и сколы",
+  details:"5. Прожилки и вкрапления",
+  edges:"6. Сбитые края и растительность",
+  albedo:"7. Albedo — итог", height:"8. Height", roughness:"9. Roughness",
+  ao:"10. AO", normal_gl:"11. Normal GL", normal_dx:"12. Normal DX"
+};
+const SURFACE_DESCS = {
+  layout:"Регулярная раскладка по выбранному шаблону. Ширина шва, фаска и внутренняя рамка задаются здесь. Шаблон и число плиток — в левой панели.",
+  color:"Цвета плиток из палитры выбранного варианта стен. «Созвучие» подтягивает средний тон к палитре стены, «разброс» оставляет плитки различимыми.",
+  grout:"Тёмная затирка, её контраст и загрязнение. Ширина шва берётся из этапа 1.",
+  wear:"Износ: приглушённые кромки, сколы и потёртости. Полировка делает пол глаже; на потолке она ослаблена. Для потолка усилены пятна.",
+  details:"Тонкие прожилки и минеральные вкрапления в духе OTWNDATA. Они не ломают регулярный рисунок, а добавляют породу.",
+  edges:"Сбитые кромки плиток и растительность в швах: сколы на краях, трава и мох, проросшие через затирку. Сколы углубляют рельеф, растительность добавляет высоту и шероховатость.",
+  albedo:"Итоговый albedo с запечённым AO.",
+  height:"Карта высот: плоские плитки, фаска, шов и неглубокий износ. Трещины в height не вырезаются.",
+  roughness:"Шероховатость плитки и затирки; полировка и износ её меняют.",
+  ao:"Ambient occlusion по height.",
+  normal_gl:"Normal map для OpenGL (Y+).",
+  normal_dx:"Normal map для DirectX (Y−)."
+};
+const DEFAULT_TEMPLATES = [
+  {id:"grid", label:"Квадратная сетка"},
+  {id:"checker", label:"Шахматка"},
+  {id:"running_bond", label:"Кирпичная перевязка"},
+  {id:"basketweave", label:"Плетёнка"},
+  {id:"hex", label:"Соты"},
+  {id:"octagon", label:"Восьмиугольники"},
+  {id:"concentric", label:"Рамка и панно"}
+];
+let META = null;
+let MODE = "wall";
 let job = null;
 let jobs = [];
 let pollTimer = null;
@@ -271,6 +400,68 @@ let topoJobId = null;
 let topoRoundTimer = null;
 let topoEditBusy = false;
 
+function stageLabel(s){
+  const dyn = job && job.stage_labels && job.stage_labels[s];
+  const surf = (job && job.kind === "surface") || (!job && MODE === "surface");
+  return dyn || (surf ? (SURFACE_LABELS[s] || LABELS[s]) : (LABELS[s] || SURFACE_LABELS[s])) || s;
+}
+function stageDesc(s){
+  const dyn = job && job.stage_descs && job.stage_descs[s];
+  const surf = (job && job.kind === "surface") || (!job && MODE === "surface");
+  return dyn || (surf ? (SURFACE_DESCS[s] || DESCS[s]) : (DESCS[s] || SURFACE_DESCS[s])) || "";
+}
+function isSurface(){ return MODE === "surface"; }
+function formFields(){
+  return isSurface() ? SURFACE_FORM : FIELDS.map(k=>[k,k]);
+}
+function readField(el){
+  if(!el) return undefined;
+  if(el.type === "number") return Number(el.value);
+  return el.value;
+}
+function setMode(mode){
+  MODE = mode === "surface" ? "surface" : "wall";
+  document.querySelectorAll(".mode-tab").forEach(b=>{
+    b.classList.toggle("active", b.dataset.mode === MODE);
+  });
+  $("wallFields").style.display = MODE === "wall" ? "" : "none";
+  $("surfaceFields").style.display = MODE === "surface" ? "" : "none";
+  $("modeHint").textContent = MODE === "surface"
+    ? "Регулярная плитка пола или потолка по шаблонам; цвета берутся из палитры стен."
+    : "Сложная неравномерная кладка камней с интерактивной топологией.";
+  if(MODE === "surface" && job && job.kind === "wall"){
+    // Start a surface job from the selected wall variant, so the new floor
+    // or ceiling matches the wall colour out of the box.
+    if(job.params.variant) $("sf_variant").value = job.params.variant;
+    if(job.params.size) $("sf_size").value = String(job.params.size);
+  }
+  if(MODE === "wall" && job && job.kind === "surface"){
+    if(job.params.variant) $("variant").value = job.params.variant;
+    if(job.params.size) $("size").value = String(job.params.size);
+  }
+  $("createHint").innerHTML = MODE === "surface"
+    ? "Шаблон задаёт почти симметричный рисунок. Шов указывается в px при 2048, поэтому 512-превью и 2048-финал выглядят одинаково по пропорциям. Публикация идёт в <code>textures_otwn/&lt;variant&gt;/&lt;surface&gt;</code>."
+    : "512 — только для быстрой проверки albedo. После подтверждения создайте клон 2048 для финальных карт. В карточке каждого этапа есть свои ползунки; они пересчитывают только этот этап. Все массивы лежат в <code>editor_data/jobs/&lt;id&gt;/cache</code>.";
+  updateActionButtons();
+  if(!job) renderJob(null);
+}
+function updateActionButtons(){
+  const jobKind = job ? (job.kind || "wall") : null;
+  $("applyBtn").disabled = !job || !!job.running_stage || jobKind !== MODE;
+}
+function surfaceKindLabel(surface){
+  return surface === "ceiling" ? "потолок" : "пол";
+}
+function populateTemplates(){
+  const sel = $("sf_template");
+  if(!sel) return;
+  const list = (META && META.surface && META.surface.templates) || DEFAULT_TEMPLATES;
+  const cur = sel.value;
+  sel.innerHTML = list.map(t=>
+    `<option value="${t.id}" title="${t.hint||''}">${t.label}</option>`).join("");
+  if(cur && list.some(t=>t.id===cur)) sel.value = cur;
+}
+
 function toast(msg, err=false){
   const el=$("toast"); el.textContent=msg; el.className="toast"+(err?" err":"");
   el.style.display="block"; clearTimeout(el._t);
@@ -284,16 +475,19 @@ async function api(path, opts={}){
 }
 function paramsFromForm(){
   const p={};
-  for(const f of FIELDS){
-    const el=$(f);
+  for(const [id,key] of formFields()){
+    const el=$(id);
     if(!el) continue;
-    p[f]=el.type==="number" ? Number(el.value) : el.value;
+    p[key]=readField(el);
   }
   return p;
 }
 function fillForm(p){
   if(!p) return;
-  for(const f of FIELDS){ if($(f) && p[f]!==undefined) $(f).value=p[f]; }
+  for(const [id,key] of formFields()){
+    const el=$(id);
+    if(el && p[key] !== undefined) el.value = p[key];
+  }
 }
 function statusText(st){
   return ({pending:"ожидает",running:"выполняется",ready:"готово к проверке",
@@ -410,7 +604,7 @@ function topoToolsHTML(){
   </div>`;
 }
 function initTopologyOverlay(){
-  if(!job) return;
+  if(!job || job.kind !== "wall") return;
   const canvas=document.querySelector('.topo-overlay');
   if(!canvas) return;
   const url=job.stages?.topology?.idmap_url;
@@ -522,18 +716,27 @@ function onTopoRoundInput(v){
 
 function renderJob(j){
   job=j;
-  $("jobPill").textContent = j ? (j.params.variant+" · "+j.params.size+" px") : "нет задачи";
+  if(j && j.kind==="surface"){
+    $("jobPill").textContent = surfaceKindLabel(j.params.surface)+" · "+
+      j.params.variant+" · "+j.params.size+" px";
+  } else {
+    $("jobPill").textContent = j ? ("стены · "+j.params.variant+" · "+j.params.size+" px") : "нет задачи";
+  }
   $("jobName").textContent = j ? j.name : "Задача не выбрана";
   $("runState").innerHTML = j && j.running_stage
-    ? '<span class="dot running"></span> выполняется: '+LABELS[j.running_stage]
+    ? '<span class="dot running"></span> выполняется: '+stageLabel(j.running_stage)
     : "";
-  $("applyBtn").disabled = !j;
   ["clone2kBtn","cloneAgedBtn","cloneCycBtn","resetBtn","deleteBtn"].forEach(id=>$(id).disabled=!j);
   $("bothVariantsBtn").disabled = !j || !j.stage_order.every(s=>j.stages[s]?.approved);
-  const finalMaps=["albedo","height","roughness","ao","normal_gl","normal_dx"];
+  const finalMaps = j && j.final_maps ? j.final_maps
+    : ["albedo","height","roughness","ao","normal_gl","normal_dx"];
   $("publishBtn").disabled = !j || !finalMaps.every(s=>j.stages[s]?.approved);
-  if(j && !formDirty) fillForm(j.params);
-  const stages = j ? j.stage_order : Object.keys(LABELS);
+  if(j && !formDirty && j.kind===MODE) fillForm(j.params);
+  updateActionButtons();
+  const stages = j ? j.stage_order
+    : (isSurface()
+        ? ((META && META.surface && META.surface.stage_order) || Object.keys(SURFACE_LABELS))
+        : Object.keys(LABELS));
   const wrap=$("stages"); wrap.innerHTML="";
   let approved=0;
   for(const s of stages){
@@ -546,10 +749,11 @@ function renderJob(j){
     const ready = st.status==="ready";
     const running = st.status==="running";
     const approvedFlag = !!st.approved;
+    const isWallTopology = j && j.kind==="wall" && s==="topology";
     const preview = st.preview_url
-      ? (s==="topology" && st.idmap_url
-          ? `<div class="topo-wrap"><img src="${st.preview_url}" alt="${LABELS[s]}" draggable="false"><canvas class="topo-overlay"></canvas></div>`
-          : `<img src="${st.preview_url}" alt="${LABELS[s]}" onclick="openModal('${st.preview_url}')">`)
+      ? (isWallTopology && st.idmap_url
+          ? `<div class="topo-wrap"><img src="${st.preview_url}" alt="${stageLabel(s)}" draggable="false"><canvas class="topo-overlay"></canvas></div>`
+          : `<img src="${st.preview_url}" alt="${stageLabel(s)}" onclick="openModal('${st.preview_url}')">`)
       : `<div class="preview-empty">${running?"идёт генерация…":"превью появится после запуска"}</div>`;
     const exports = st.export_urls && Object.keys(st.export_urls).length
       ? `<div class="exports">${Object.keys(st.export_urls).map(n=>
@@ -565,7 +769,7 @@ function renderJob(j){
     card.innerHTML=`
       <div class="stage-head">
         <span class="stage-num">${s}</span>
-        <span class="stage-title">${LABELS[s]}</span>
+        <span class="stage-title">${stageLabel(s)}</span>
         <span class="badge ${st.status}">${statusText(st.status)}</span>
         <span class="right">
           ${running?'<span class="dot running"></span>':""}
@@ -576,11 +780,11 @@ function renderJob(j){
       <div class="stage-body">
         <div class="preview-box">${preview}</div>
         <div class="stage-info">
-          <p>${DESCS[s]||""}</p>
+          <p>${stageDesc(s)}</p>
           ${controls}
-          ${s==="topology" ? topoToolsHTML() : ""}
+          ${isWallTopology ? topoToolsHTML() : ""}
           <div class="msg">${st.message||""}</div>
-          ${deps.length?`<div class="deps">Сначала подтвердите: ${deps.map(d=>LABELS[d]).join(", ")}</div>`:""}
+          ${deps.length?`<div class="deps">Сначала подтвердите: ${deps.map(d=>stageLabel(d)).join(", ")}</div>`:""}
           ${exports}
         </div>
       </div>`;
@@ -602,8 +806,12 @@ function renderLog(j){
 }
 function renderJobs(){
   const sel=$("jobSelect");
-  sel.innerHTML = jobs.length?jobs.map(j=>
-    `<option value="${j.id}">${j.name} — ${j.params.variant} ${j.params.size}px</option>`).join("")
+  sel.innerHTML = jobs.length?jobs.map(j=>{
+    const kind = j.kind==="surface"
+      ? surfaceKindLabel(j.params.surface)
+      : "стены";
+    return `<option value="${j.id}">${j.name} — ${kind} · ${j.params.variant} ${j.params.size}px</option>`;
+  }).join("")
     : '<option value="">— нет задач —</option>';
   if(job && jobs.some(x=>x.id===job.id)) sel.value=job.id;
 }
@@ -611,8 +819,10 @@ async function loadJob(id){
   if(!id) return;
   try{
     const next=await api("/api/job/"+id);
-    if(!job || job.id!==next.id){ topoSelected.clear(); topoHover=null; topoData=null; }
+    const changed = !job || job.id!==next.id;
+    if(changed){ topoSelected.clear(); topoHover=null; topoData=null; }
     job=next;
+    if(changed) setMode(job.kind==="surface" ? "surface" : "wall");
     formDirty=false;
     renderJob(job);
     schedulePoll();
@@ -625,6 +835,12 @@ async function loadJobs(){
     if(!job && jobs.length) return loadJob(jobs[0].id);
     if(job && !jobs.some(x=>x.id===job.id)) return loadJob(jobs[0]?.id);
   }catch(e){ toast(e.message,true); }
+}
+async function loadMeta(){
+  try{
+    META=await api("/api/meta");
+    populateTemplates();
+  }catch(e){ populateTemplates(); }
 }
 function schedulePoll(){
   clearTimeout(pollTimer);
@@ -640,13 +856,16 @@ async function poll(){
 async function createJob(){
   try{
     const j=await api("/api/jobs",{method:"POST",body:JSON.stringify({
-      name:$("name").value, params:paramsFromForm()})});
+      name:$("name").value, kind:MODE, params:paramsFromForm()})});
     job=j.id; jobs.unshift(j); formDirty=false; renderJobs(); await loadJob(j.id);
-    toast("Задача создана");
+    toast("Задача создана: "+(MODE==="surface"?"пол/потолок":"стены"));
   }catch(e){ toast(e.message,true); }
 }
 async function applyParams(){
   if(!job) return;
+  if((job.kind || "wall") !== MODE){
+    toast("Сначала выберите режим текущей задачи", true); return;
+  }
   try{
     const oldHash=job.hash;
     const j=await api("/api/job/"+job.id+"/params",{method:"POST",
@@ -659,7 +878,7 @@ async function runStage(stage){
   if(!job) return;
   try{
     await api("/api/job/"+job.id+"/run",{method:"POST",body:JSON.stringify({stage})});
-    schedulePoll(); toast("Этап запущен: "+LABELS[stage]);
+    schedulePoll(); toast("Этап запущен: "+stageLabel(stage));
   }catch(e){ toast(e.message,true); }
 }
 async function approveStage(stage){
@@ -671,7 +890,7 @@ async function approveStage(stage){
 }
 async function resetStage(stage){
   if(!job) return;
-  if(!confirm("Сбросить этап «"+LABELS[stage]+"» и все последующие?")) return;
+  if(!confirm("Сбросить этап «"+stageLabel(stage)+"» и все последующие?")) return;
   try{
     job=await api("/api/job/"+job.id+"/reset",{method:"POST",body:JSON.stringify({stage})});
     renderJob(job); schedulePoll();
@@ -697,7 +916,10 @@ async function cloneJob(variant,size){
 }
 async function publishMaps(){
   if(!job) return;
-  if(!confirm("Скопировать подтверждённые карты в textures_otwn/"+job.params.variant+"? Существующие файлы с теми же именами будут заменены.")) return;
+  const dest = job.kind==="surface"
+    ? "textures_otwn/"+job.params.variant+"/"+job.params.surface
+    : "textures_otwn/"+job.params.variant;
+  if(!confirm("Скопировать подтверждённые карты в "+dest+"? Существующие файлы с теми же именами будут заменены.")) return;
   try{
     const d=await api("/api/job/"+job.id+"/publish",{method:"POST",body:"{}"});
     toast("Опубликовано: "+d.directory);
@@ -719,7 +941,27 @@ function openModal(url){
 }
 $("modal").addEventListener("click",()=>$("modal").classList.remove("open"));
 $("jobSelect").addEventListener("change",e=>loadJob(e.target.value));
+document.querySelectorAll(".mode-tab").forEach(btn=>{
+  btn.addEventListener("click",()=>setMode(btn.dataset.mode));
+});
 for(const f of FIELDS){ const el=$(f); if(el) el.addEventListener("input",()=>formDirty=true); }
+for(const [id] of SURFACE_FORM){ const el=$(id); if(el) el.addEventListener("input",()=>formDirty=true); }
+$("sf_surface").addEventListener("change",()=>{
+  formDirty=true;
+  const tpl=$("sf_template").value;
+  const want = $("sf_surface").value === "ceiling" ? "concentric" : "grid";
+  const other = $("sf_surface").value === "ceiling" ? "grid" : "concentric";
+  if(!tpl || tpl === other) $("sf_template").value = want;
+  const rec = ((META&&META.surface&&META.surface.templates)||DEFAULT_TEMPLATES)
+    .find(t=>t.id===$("sf_template").value);
+  if(rec && rec.default_tiles) $("sf_tiles").value = rec.default_tiles;
+});
+$("sf_template").addEventListener("change",()=>{
+  const rec = ((META&&META.surface&&META.surface.templates)||DEFAULT_TEMPLATES)
+    .find(t=>t.id===$("sf_template").value);
+  if(rec && rec.default_tiles) $("sf_tiles").value = rec.default_tiles;
+  formDirty=true;
+});
 $("stages").addEventListener("input", onStageControlInput);
 $("createBtn").addEventListener("click",createJob);
 $("applyBtn").addEventListener("click",applyParams);
@@ -735,7 +977,13 @@ $("resetBtn").addEventListener("click",()=>{
     resetStage(job.stage_order[0]);
   }
 });
-(async()=>{ await loadJobs(); if(!job) renderJob(null); })();
+(async()=>{
+  populateTemplates();
+  setMode("wall");
+  await loadMeta();
+  await loadJobs();
+  if(!job) renderJob(null);
+})();
 </script>
 </body>
 </html>
